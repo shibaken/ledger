@@ -14,6 +14,7 @@ module.exports = {
             map: null,
             tileLayer: null,
             layers: [],
+            popup: null,
         }
     },
     mounted(){
@@ -21,10 +22,16 @@ module.exports = {
         this.initLayers();
     },
     methods: {
+        onClick(e){
+            this.popup
+            .setLatLng(e.latlng)
+            .setContent(e.latlng.toString())
+            .openOn(this.map);
+        },
         initMap(){
             console.log('Start initMap()');
 
-            this.map = L.map('map').setView([38.63, -90.23], 12);
+            this.map = L.map('map').setView([-31.9505, 115.8605], 4);
             this.tileLayer = L.tileLayer(
                 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/rastertiles/voyager/{z}/{x}/{y}.png',
                 {
@@ -33,6 +40,8 @@ module.exports = {
                 }
             );
             this.tileLayer.addTo(this.map);
+            this.popup = L.popup();
+            this.map.on('click', this.onClick);
         },
         initLayers(){
 
@@ -44,6 +53,6 @@ module.exports = {
 <style lang="css">
 #map {
     height: 400px;
-    border: solid 1px;
+    border: solid 1px #666;
 }
 </style>
