@@ -11,6 +11,16 @@ from wildlifecompliance.components.returns.email import send_external_submit_ema
                                                         send_return_accept_email_notification
 
 
+def template_directory_path(instance, filename):
+    """
+    Static location for Returns template.
+    :param instance: Request.
+    :param filename: Name of file.
+    :return: file path.
+    """
+    return 'wildlifecompliance/returns/template/{0}'.format(filename)
+
+
 class ReturnType(models.Model):
     """
     A definition to identify the format used to facilitate Return.
@@ -23,8 +33,7 @@ class ReturnType(models.Model):
         (RETURN_TYPE_QUESTION, 'Question'),
         (RETURN_TYPE_DATA, 'Data')
     )
-
-    Name = models.CharField(null=True, blank=True, max_length=100)
+    name = models.CharField(null=True, blank=True, max_length=100)
     description = models.TextField(null=True, blank=True, max_length=256)
     data_descriptor = JSONField()
     data_format = models.CharField(
@@ -32,12 +41,13 @@ class ReturnType(models.Model):
         max_length=30,
         choices=RETURN_TYPE_CHOICES,
         default=RETURN_TYPE_SHEET)
+    data_template = models.FileField(upload_to=template_directory_path, null=True)
     replaced_by = models.ForeignKey('self', on_delete=models.PROTECT, blank=True, null=True)
     version = models.SmallIntegerField(default=1, blank=False, null=False)
 
     class Meta:
         app_label = 'wildlifecompliance'
-        unique_together = ('Name', 'version')
+        unique_together = ('name', 'version')
 
     @property
     def resources(self):
@@ -54,7 +64,7 @@ class ReturnType(models.Model):
         return resource.get('schema', {}) if resource else None
 
     def __str__(self):
-        return '{} - v{}'.format(self.Name, self.version)
+        return '{} - v{}'.format(self.name, self.version)
 
 
 class Return(models.Model):
@@ -67,6 +77,7 @@ class Return(models.Model):
     RETURN_PROCESSING_STATUS_FUTURE = 'future'
     RETURN_PROCESSING_STATUS_WITH_CURATOR = 'with_curator'
     RETURN_PROCESSING_STATUS_ACCEPTED = 'accepted'
+    RETURN_PROCESSING_STATUS_PAYMENT = 'payment'
     PROCESSING_STATUS_CHOICES = (
         (RETURN_PROCESSING_STATUS_DUE, 'Due'),
         (RETURN_PROCESSING_STATUS_OVERDUE, 'Overdue'),
@@ -74,6 +85,7 @@ class Return(models.Model):
         (RETURN_PROCESSING_STATUS_FUTURE, 'Future'),
         (RETURN_PROCESSING_STATUS_WITH_CURATOR, 'With Curator'),
         (RETURN_PROCESSING_STATUS_ACCEPTED, 'Accepted'),
+        (RETURN_PROCESSING_STATUS_PAYMENT, 'Awaiting Payment')
     )
     RETURN_CUSTOMER_STATUS_DUE = 'due'
     RETURN_CUSTOMER_STATUS_OVERDUE = 'overdue'
@@ -81,14 +93,6 @@ class Return(models.Model):
     RETURN_CUSTOMER_STATUS_FUTURE = 'future'
     RETURN_CUSTOMER_STATUS_UNDER_REVIEW = 'under_review'
     RETURN_CUSTOMER_STATUS_ACCEPTED = 'accepted'
-    CUSTOMER_STATUS_CHOICES = (
-        (RETURN_CUSTOMER_STATUS_DUE, 'Due'),
-        (RETURN_CUSTOMER_STATUS_OVERDUE, 'Overdue'),
-        (RETURN_CUSTOMER_STATUS_DRAFT, 'Draft'),
-        (RETURN_CUSTOMER_STATUS_FUTURE, 'Future'),
-        (RETURN_CUSTOMER_STATUS_UNDER_REVIEW, 'Under Review'),
-        (RETURN_CUSTOMER_STATUS_ACCEPTED, 'Accepted'),
-    )
     lodgement_number = models.CharField(max_length=9, blank=True, default='')
     application = models.ForeignKey(Application, related_name='returns')
     licence = models.ForeignKey(
@@ -100,10 +104,6 @@ class Return(models.Model):
         choices=PROCESSING_STATUS_CHOICES,
         max_length=20,
         default=RETURN_PROCESSING_STATUS_FUTURE)
-    customer_status = models.CharField(
-        choices=CUSTOMER_STATUS_CHOICES,
-        max_length=20,
-        default=RETURN_CUSTOMER_STATUS_FUTURE)
     assigned_to = models.ForeignKey(
         EmailUser,
         related_name='wildlifecompliance_return_assignments',
@@ -129,6 +129,14 @@ class Return(models.Model):
 
     class Meta:
         app_label = 'wildlifecompliance'
+
+    # Append 'R' to Return id to generate Return lodgement number.
+    def save(self, *args, **kwargs):
+        super(Return, self).save(*args, **kwargs)
+        if self.lodgement_number == '':
+            new_lodgement_id = 'R{0:06d}'.format(self.pk)
+            self.lodgement_number = new_lodgement_id
+            self.save()
 
     @property
     def regions(self):
@@ -156,45 +164,18 @@ class Return(models.Model):
 
     @property
     def table(self):
-        tables = []
-        if self.format == 'sheet':
-            return tables
-        for resource in self.return_type.resources:
-            resource_name = resource.get('name')
-            schema = Schema(resource.get('schema'))
-            headers = []
-            for f in schema.fields:
-                header = {
-                    "label": f.name,
-                    "required": f.required,
-                    "type": f.type.name
-                }
-                if f.is_species:
-                    header["species"] = f.species_type
-                headers.append(header)
-            table = {
-               'name': resource_name,
-               'title': resource.get('title', resource.get('name')),
-               'headers': headers,
-               'data': None
-            }
-            try:
-                return_table = self.returntable_set.get(name=resource_name)
-                rows = [
-                    return_row.data for return_row in return_table.returnrow_set.all()]
-                validated_rows = schema.rows_validator(rows)
-                table['data'] = validated_rows
-            except ReturnTable.DoesNotExist:
-                result = {}
-                results = []
-                for field_name in schema.fields:
-                    result[field_name.name] = {
-                        'value': None
-                    }
-                results.append(result)
-                table['data'] = results
-        tables.append(table)
-        return tables
+        """
+        Return data presented in table format with column headers.
+        :return: formatted data.
+        """
+        table = []
+        if self.has_sheet:
+            return self.sheet.table
+        if self.has_data:
+            return self.data.table
+        if self.has_question:
+            return self.question.table
+        return table
 
     @property
     def sheet(self):
@@ -226,7 +207,7 @@ class Return(models.Model):
         Property defining if the Return is Question based.
         :return: Boolean
         """
-        return True if self.format == 'question' else False
+        return True if self.format == ReturnType.RETURN_TYPE_QUESTION else False
 
     @property
     def has_data(self):
@@ -234,7 +215,7 @@ class Return(models.Model):
         Property defining if the Return is Data based.
         :return: Boolean
         """
-        return True if self.format == 'data' else False
+        return True if self.format == ReturnType.RETURN_TYPE_DATA else False
 
     @property
     def has_sheet(self):
@@ -242,14 +223,31 @@ class Return(models.Model):
         Property defining if the Return is Running Sheet based.
         :return: Boolean
         """
-        return True if self.format == 'sheet' else False
+        return True if self.format == ReturnType.RETURN_TYPE_SHEET else False
+
+    @property
+    def customer_status(self):
+        """
+        Property defining external status in relation to processing status.
+        :return: External Status.
+        """
+        workflow_mapper = {
+            self.RETURN_PROCESSING_STATUS_DUE : self.RETURN_CUSTOMER_STATUS_DUE,
+            self.RETURN_PROCESSING_STATUS_OVERDUE: self.RETURN_CUSTOMER_STATUS_OVERDUE,
+            self.RETURN_PROCESSING_STATUS_DRAFT: self.RETURN_CUSTOMER_STATUS_DRAFT,
+            self.RETURN_PROCESSING_STATUS_FUTURE: self.RETURN_CUSTOMER_STATUS_FUTURE,
+            self.RETURN_PROCESSING_STATUS_WITH_CURATOR: self.RETURN_CUSTOMER_STATUS_UNDER_REVIEW,
+            self.RETURN_PROCESSING_STATUS_ACCEPTED: self.RETURN_CUSTOMER_STATUS_ACCEPTED,
+            self.RETURN_PROCESSING_STATUS_PAYMENT: self.RETURN_CUSTOMER_STATUS_UNDER_REVIEW
+        }
+
+        return workflow_mapper.get(self.processing_status, self.RETURN_CUSTOMER_STATUS_FUTURE)
 
     def set_submitted(self, request):
         with transaction.atomic():
             try:
                 if self.processing_status == Return.RETURN_PROCESSING_STATUS_FUTURE\
                         or self.processing_status == Return.RETURN_PROCESSING_STATUS_DUE:
-                            self.customer_status = Return.RETURN_CUSTOMER_STATUS_UNDER_REVIEW
                             self.processing_status = Return.RETURN_PROCESSING_STATUS_WITH_CURATOR
                             self.submitter = request.user
                             self.save()
@@ -272,7 +270,6 @@ class Return(models.Model):
     def accept(self, request):
         with transaction.atomic():
             self.processing_status = Return.RETURN_PROCESSING_STATUS_ACCEPTED
-            self.customer_status = Return.RETURN_CUSTOMER_STATUS_ACCEPTED
             self.save()
             self.log_user_action(
                 ReturnUserAction.ACTION_ACCEPT_REQUEST.format(
@@ -331,7 +328,7 @@ class ReturnData(object):
         Data Table of record information for Species.
         :return: formatted data.
         """
-        return self._return.table()
+        return self._get_raw_table()
 
     def store(self, request):
         """
@@ -350,6 +347,64 @@ class ReturnData(object):
                     self._create_return_data_from_post_data(returns_tables.encode('utf-8'), request.POST)
                 else:
                     raise FieldError('Enter data in correct format.')
+
+    def _get_raw_table(self):
+        tables = []
+        for resource in self._return.return_type.resources:
+            resource_name = resource.get('name')
+            schema = Schema(resource.get('schema'))
+            headers = []
+            for f in schema.fields:
+                header = {
+                    "label": f.name,
+                    "required": f.required,
+                    "type": f.type.name
+                }
+                if f.is_species:
+                    header["species"] = f.species_type
+                headers.append(header)
+            table = {
+                'name': resource_name,
+                'title': resource.get('title', resource.get('name')),
+                'headers': headers,
+                'data': None
+            }
+            try:
+                return_table = self._return.returntable_set.get(name=resource_name)
+                rows = [
+                    return_row.data for return_row in return_table.returnrow_set.all()]
+                validated_rows = schema.rows_validator(rows)
+                table['data'] = validated_rows
+            except ReturnTable.DoesNotExist:
+                result = {}
+                results = []
+                for field_name in schema.fields:
+                    result[field_name.name] = {
+                        'value': None
+                    }
+                results.append(result)
+                table['data'] = results
+        tables.append(table)
+
+        return tables
+
+    def _get_formatted_table(self):
+        headers = {}
+        tables = {}
+        #tables = {
+        #    "type": "table",
+        #    "headers": "{\"Species\": \"text\", \"Quantity\": \"number\", \"Date\": \"date\", \"Taken\": \"checkbox\"}",
+        #    "name": "Section2-0",
+        #    "label": "The first table in section 2"
+        #}
+
+        tables['headers'] = 'Quantity'
+        tables['type'] = 'table'
+        tables['label'] = 'first table'
+        tables['name'] = 'table-example'
+        tables['data'] = '100'
+
+        return tables
 
     def _is_post_data_valid(self, tables_info, post_data):
         """
@@ -432,7 +487,45 @@ class ReturnQuestion(object):
         Table of questions for Species. Defaults to a Species on the Return if exists.
         :return: formatted data.
         """
-        return self._return.table
+        tables = []
+        cnt = 0
+        for resource in self._return.return_type.resources:
+            resource_name = ReturnType.RETURN_TYPE_QUESTION
+            schema = Schema(resource.get('schema'))
+            headers = []
+            for f in schema.fields:
+                header = {
+                    "label": f.name,
+                    "name": f.name,
+                    "required": f.required,
+                    "type": f.type.name,
+                }
+                if f.is_species:
+                    header["species"] = f.species_type
+                headers.append(header)
+            table = {
+                'name': resource_name,
+                'title': resource.get('title', resource.get('name')),
+                'headers': headers,
+                'data': None
+            }
+            try:
+                return_table = self._return.returntable_set.get(name=resource_name)
+                rows = [
+                    return_row.data for return_row in return_table.returnrow_set.all()]
+                #validated_rows = schema.rows_validator(rows)
+                table['data'] = rows
+            except ReturnTable.DoesNotExist:
+                result = {}
+                results = []
+                for field_name in schema.fields:
+                    result[field_name.name] = {
+                        'value': None
+                    }
+                results.append(result)
+                table['data'] = results
+        tables.append(table)
+        return tables
 
     def store(self, request):
         """
@@ -440,7 +533,38 @@ class ReturnQuestion(object):
         :param request:
         :return:
         """
-        pass
+        self._create_return_data(self._return, request.POST)
+
+    def _get_table_rows(self, _data):
+        """
+        Gets the formatted row of data from Species data
+        :param _data:
+        :return: by_column is of format {'col_header':[row1_val, row2_val,...],...}
+        """
+        by_column = dict([])
+        for key in _data.keys():
+            by_column[key] = _data[key]
+        self._rows = []
+        self._rows.append(by_column)
+
+    def _create_return_data(self, ret, _data):
+        """
+        Saves row of data to db.
+        :param ret:
+        :param _data:
+        :return:
+        """
+        self._get_table_rows(_data)
+        if self._rows:
+            return_table = ReturnTable.objects.get_or_create(
+                name=ReturnType.RETURN_TYPE_QUESTION, ret=ret)[0]
+            # delete any existing rows as they will all be recreated
+            return_table.returnrow_set.all().delete()
+            return_rows = [
+                ReturnRow(
+                    return_table=return_table,
+                    data=row) for row in self._rows]
+            ReturnRow.objects.bulk_create(return_rows)
 
     def __str__(self):
         return self._return.lodgement_number
@@ -618,6 +742,29 @@ class ReturnSheet(object):
         """
         self._create_return_data(self._return, _species_id, _data)
         self.set_species(_species_id)
+
+    def set_activity_from_previous(self):
+        """
+        Sets Running Sheet Activity for the movement of Species stock from previous Licence Running Sheet.
+        :return:
+        """
+        previous_licence = self._return.application.previous_application.licence
+        if previous_licence:
+            # TODO : for the reissue of licences. Species stock count must carry over. Nb. change in species.
+            '''      
+            table = {'data': None}              
+            for each species in previous_licence
+                try:
+                    return_table = self._return.returntable_set.get(name=_resource_name)
+                    rows = [_return_row.data for _return_row in _return_table.returnrow_set.all()]
+                    table['data'] = rows
+                    table['echo'] = 1
+                    table['totalRecords'] = str(rows.__len__())
+                    table['totalDisplayRecords'] = str(rows.__len__())
+                except ReturnTable.DoesNotExist:
+                    self._table = self._NO_ACTIVITY
+                self._create_return_data(self._return, _species_id, _table)
+            '''
 
     def set_species(self, _species):
         """

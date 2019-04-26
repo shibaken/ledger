@@ -9,7 +9,8 @@ from wildlifecompliance.components.applications.models import (
     Assessment,
     ActivityPermissionGroup,
     AmendmentRequest,
-    ApplicationSelectedActivity
+    ApplicationSelectedActivity,
+    ApplicationFormDataRecord,
 )
 from wildlifecompliance.components.organisations.models import (
     Organisation
@@ -173,6 +174,29 @@ class ExternalAmendmentRequestSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class ApplicationFormDataRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ApplicationFormDataRecord
+        fields = (
+            'field_name',
+            'schema_name',
+            'component_type',
+            'instance_name',
+            'comment',
+            'deficiency',
+            'value',
+        )
+        read_only_fields = (
+            'field_name',
+            'schema_name',
+            'component_type',
+            'instance_name',
+            'comment',
+            'deficiency',
+            'value',
+        )
+
+
 class BaseApplicationSerializer(serializers.ModelSerializer):
     readonly = serializers.SerializerMethodField(read_only=True)
     licence_type_short_name = serializers.ReadOnlyField()
@@ -180,12 +204,13 @@ class BaseApplicationSerializer(serializers.ModelSerializer):
     character_check_status = CustomChoiceField(read_only=True)
     return_check_status = CustomChoiceField(read_only=True)
     application_fee = serializers.DecimalField(
-        max_digits=8, decimal_places=2, coerce_to_string=False)
+        max_digits=8, decimal_places=2, coerce_to_string=False, read_only=True)
     licence_fee = serializers.DecimalField(
-        max_digits=8, decimal_places=2, coerce_to_string=False)
+        max_digits=8, decimal_places=2, coerce_to_string=False, read_only=True)
     category_name = serializers.SerializerMethodField(read_only=True)
     activity_names = serializers.SerializerMethodField(read_only=True)
     activity_purpose_string = serializers.SerializerMethodField(read_only=True)
+    purpose_string = serializers.SerializerMethodField(read_only=True)
     amendment_requests = serializers.SerializerMethodField(read_only=True)
     can_current_user_edit = serializers.SerializerMethodField(read_only=True)
     payment_status = serializers.SerializerMethodField(read_only=True)
@@ -194,6 +219,8 @@ class BaseApplicationSerializer(serializers.ModelSerializer):
     processed = serializers.SerializerMethodField()
     id_check_status = CustomChoiceField(read_only=True)
     processing_status = CustomChoiceField(read_only=True, choices=Application.PROCESSING_STATUS_CHOICES)
+    data = ApplicationFormDataRecordSerializer(many=True)
+    application_type = CustomChoiceField(read_only=True)
 
     class Meta:
         model = Application
@@ -231,13 +258,15 @@ class BaseApplicationSerializer(serializers.ModelSerializer):
             'category_name',
             'activity_names',
             'activity_purpose_string',
+            'purpose_string',
             'can_current_user_edit',
             'payment_status',
             'assigned_officer',
             'can_be_processed',
             'pdf_licence',
             'activities',
-            'processed'
+            'processed',
+            'application_type'
         )
         read_only_fields = ('documents',)
 
@@ -255,7 +284,10 @@ class BaseApplicationSerializer(serializers.ModelSerializer):
 
     def get_activity_purpose_string(self, obj):
         activity_names = obj.licence_type_name.split(' - ')[1] if ' - ' in obj.licence_type_name else obj.licence_type_name
-        return activity_names.replace('), ', ')\n')
+        return activity_names
+
+    def get_purpose_string(self, obj):
+        return obj.licence_purpose_names
 
     def get_activity_names(self, obj):
         return obj.licence_activity_names
@@ -323,6 +355,7 @@ class DTInternalApplicationSerializer(BaseApplicationSerializer):
         source='assigned_officer.get_full_name')
     can_be_processed = serializers.SerializerMethodField(read_only=True)
     user_in_officers_and_assessors = serializers.SerializerMethodField(read_only=True)
+    application_type = CustomChoiceField(read_only=True)
 
     class Meta:
         model = Application
@@ -338,13 +371,19 @@ class DTInternalApplicationSerializer(BaseApplicationSerializer):
             'category_name',
             'activity_names',
             'activity_purpose_string',
+            'purpose_string',
             'can_user_view',
             'can_current_user_edit',
             'payment_status',
             'assigned_officer',
             'can_be_processed',
-            'user_in_officers_and_assessors'
+            'user_in_officers_and_assessors',
+            'application_type'
         )
+        # the serverSide functionality of datatables is such that only columns that have field 'data'
+        # defined are requested from the serializer. Use datatables_always_serialize to force render
+        # of fields that are not listed as 'data' in the datatable columns
+        datatables_always_serialize = fields
 
     def get_user_in_officers_and_assessors(self, obj):
         if self.context['request'].user and self.context['request'].user in obj.officers_and_assessors:
@@ -360,6 +399,7 @@ class DTExternalApplicationSerializer(BaseApplicationSerializer):
     customer_status = CustomChoiceField(read_only=True)
     can_current_user_edit = serializers.SerializerMethodField(read_only=True)
     payment_status = serializers.SerializerMethodField(read_only=True)
+    application_type = CustomChoiceField(read_only=True)
 
     class Meta:
         model = Application
@@ -375,10 +415,16 @@ class DTExternalApplicationSerializer(BaseApplicationSerializer):
             'category_name',
             'activity_names',
             'activity_purpose_string',
+            'purpose_string',
             'can_user_view',
             'can_current_user_edit',
             'payment_status',
+            'application_type'
         )
+        # the serverSide functionality of datatables is such that only columns that have field 'data'
+        # defined are requested from the serializer. Use datatables_always_serialize to force render
+        # of fields that are not listed as 'data' in the datatable columns
+        datatables_always_serialize = fields
 
 
 class ApplicationSerializer(BaseApplicationSerializer):
@@ -694,6 +740,14 @@ class DTAssessmentSerializer(serializers.ModelSerializer):
     applicant = serializers.CharField(source='application.applicant')
     application_category = serializers.CharField(
         source='application.licence_category_name')
+    application = serializers.CharField(
+        source='application.lodgement_number')
+    application_id = serializers.CharField(
+        source='application.id')
+    application_type = CustomChoiceField(
+        source='application.application_type',
+        choices=Application.APPLICATION_TYPE_CHOICES,
+        read_only=True)
 
     class Meta:
         model = Assessment
@@ -707,23 +761,14 @@ class DTAssessmentSerializer(serializers.ModelSerializer):
             'submitter',
             'application_lodgement_date',
             'applicant',
-            'application_category'
+            'application_category',
+            'application_type',
+            'application_id'
         )
+        # the serverSide functionality of datatables is such that only columns that have field 'data'
+        # defined are requested from the serializer. Use datatables_always_serialize to force render
+        # of fields that are not listed as 'data' in the datatable columns
+        datatables_always_serialize = fields
 
     def get_submitter(self, obj):
         return EmailUserSerializer(obj.application.submitter).data
-
-
-class SearchKeywordSerializer(serializers.Serializer):
-    number = serializers.CharField()
-    id = serializers.IntegerField()
-    type = serializers.CharField()
-    org_applicant = serializers.CharField()
-    proxy_applicant = serializers.CharField()
-    submitter = serializers.CharField()
-    text = serializers.JSONField(required=False)
-
-
-class SearchReferenceSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    type = serializers.CharField()

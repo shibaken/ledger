@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 import datetime
 import logging
 import re
+from decimal import Decimal
 from django.db import models, transaction
 from django.db.models.signals import pre_delete
 from django.db.models.query import QuerySet
@@ -224,7 +225,7 @@ class Application(RevisionedMixin):
     APPLICATION_TYPE_AMENDMENT = 'amendment'
     APPLICATION_TYPE_RENEWAL = 'renewal'
     APPLICATION_TYPE_CHOICES = (
-        (APPLICATION_TYPE_NEW_LICENCE, 'New Licence'),
+        (APPLICATION_TYPE_NEW_LICENCE, 'New'),
         (APPLICATION_TYPE_AMENDMENT, 'Amendment'),
         (APPLICATION_TYPE_RENEWAL, 'Renewal'),
     )
@@ -234,9 +235,7 @@ class Application(RevisionedMixin):
         max_length=40,
         choices=APPLICATION_TYPE_CHOICES,
         default=APPLICATION_TYPE_NEW_LICENCE)
-    data = JSONField(blank=True, null=True)
     comment_data = JSONField(blank=True, null=True)
-    schema = JSONField(blank=False, null=False)
     licence_purposes = models.ManyToManyField(
         'wildlifecompliance.LicencePurpose',
         blank=True
@@ -312,8 +311,8 @@ class Application(RevisionedMixin):
     def save(self, *args, **kwargs):
         super(Application, self).save(*args, **kwargs)
         if self.lodgement_number == '':
-            new_lodgment_id = 'A{0:06d}'.format(self.pk)
-            self.lodgement_number = new_lodgment_id
+            new_lodgement_id = 'A{0:06d}'.format(self.pk)
+            self.lodgement_number = new_lodgement_id
             self.save()
 
     @property
@@ -516,6 +515,11 @@ class Application(RevisionedMixin):
         ).distinct())
 
     @property
+    def licence_purpose_names(self):
+        return ', '.join([purpose.short_name
+                          for purpose in self.licence_purposes.all().order_by('licence_activity','short_name')])
+
+    @property
     def licence_type_name(self):
         from wildlifecompliance.components.licences.models import LicenceActivity
         licence_category = self.licence_category_name
@@ -593,14 +597,80 @@ class Application(RevisionedMixin):
     def log_user_action(self, action, request):
         return ApplicationUserAction.log_action(self, action, request.user)
 
+    def calculate_fees(self, data_source):
+        schema_fields = self.schema_fields
+        fees = Application.calculate_base_fees(
+            self.licence_purposes.values_list('id', flat=True)
+        )
+
+        def adjust_fee(fees, component, schema_name, adjusted_by_fields):
+            def increase_fee(fees, field, amount):
+                fees[field] += amount
+                fees[field] = fees[field] if fees[field] >= 0 else 0
+                return True
+
+            modifier_keys = {
+                'IncreaseLicenceFee': 'licence',
+                'IncreaseApplicationFee': 'application',
+            }
+            increase_limit_key = 'IncreaseTimesLimit'
+            try:
+                increase_count = adjusted_by_fields[schema_name]
+            except KeyError:
+                increase_count = adjusted_by_fields[schema_name] = 0
+
+            if increase_limit_key in component:
+                max_increases = int(component[increase_limit_key])
+                if increase_count >= max_increases:
+                    return
+
+            adjustments_performed = sum(key in component and increase_fee(
+                fees, field, component[key]
+            ) for key, field in modifier_keys.items())
+
+            if adjustments_performed:
+                adjusted_by_fields[schema_name] += 1
+
+        # Adjust fees based on selected options (radios and checkboxes)
+        adjusted_by_fields = {}
+        for form_data_record in data_source:
+            try:
+                # Retrieve dictionary of fields from a model instance
+                data_record = form_data_record.__dict__
+            except AttributeError:
+                # If a raw form data (POST) is supplied, form_data_record is a key
+                data_record = data_source[form_data_record]
+
+            schema_name = data_record['schema_name']
+            schema_data = schema_fields[schema_name]
+
+            if 'options' in schema_data:
+                for option in schema_data['options']:
+                    # Only consider fee modifications if the current option is selected
+                    if option['value'] != data_record['value']:
+                        continue
+                    adjust_fee(fees, option, schema_name, adjusted_by_fields)
+
+            # If this is a checkbox - skip unchecked ones
+            elif data_record['value'] == 'on':
+                adjust_fee(fees, schema_data, schema_name, adjusted_by_fields)
+
+        return fees
+
+    def update_fees(self):
+        if self.processing_status != Application.PROCESSING_STATUS_DRAFT:
+            return
+
+        fees = self.calculate_fees(self.data)
+
+        self.application_fee = fees['application']
+        self.licence_fee = fees['licence']
+        self.save()
+
     def submit(self, request, viewset):
-        from wildlifecompliance.components.applications.utils import SchemaParser
         from wildlifecompliance.components.licences.models import LicenceActivity
         with transaction.atomic():
             if self.can_user_edit:
-                # Save the data first
-                parser = SchemaParser(draft=False)
-                parser.save_application_user_data(self, request, viewset)
                 # self.processing_status = Application.PROCESSING_STATUS_UNDER_REVIEW
                 self.customer_status = Application.CUSTOMER_STATUS_UNDER_REVIEW
                 self.submitter = request.user
@@ -943,6 +1013,87 @@ class Application(RevisionedMixin):
             return WildlifeLicence.objects.none()
 
     @property
+    def required_fields(self):
+        return {key: data for key, data in self.schema_fields.items() if 'isRequired' in data and data['isRequired']}
+
+    @property
+    def schema_fields(self):
+        fields = {}
+
+        def iterate_children(schema_group, fields, parent={}, parent_type='', condition={}):
+            children_keys = [
+                'children',
+                'header',
+                'expander',
+                'conditions',
+            ]
+            container = {
+                i: schema_group[i] for i in range(len(schema_group))
+            } if isinstance(schema_group, list) else schema_group
+
+            for key, item in container.items():
+                if isinstance(item, list):
+                    if parent_type == 'conditions':
+                        condition[parent['name']] = key
+                    iterate_children(item, fields, parent, parent_type, condition)
+                    continue
+
+                name = item['name']
+                fields[name] = {}
+                fields[name].update(item)
+                fields[name]['condition'] = {}
+                fields[name]['condition'].update(condition)
+
+                for children_key in children_keys:
+                    if children_key in fields[name]:
+                        del fields[name][children_key]
+                        iterate_children(item[children_key], fields, fields[name], children_key, condition)
+
+        iterate_children(self.schema, fields)
+        return fields
+
+    def get_visible_form_data_tree(self, form_data_records=None):
+        data_tree = {}
+        schema_fields = self.schema_fields
+
+        if form_data_records is None:
+            form_data_records = [(record.field_name, {
+                'schema_name': record.schema_name,
+                'instance_name': record.instance_name,
+                'value': record.value,
+            }) for record in self.form_data_records.all()]
+
+        for field_name, item in form_data_records:
+            instance = item['instance_name']
+            schema_name = item['schema_name']
+
+            if instance not in data_tree:
+                data_tree[instance] = {}
+            data_tree[instance][schema_name] = item['value']
+
+        for instance, schemas in data_tree.items():
+            for schema_name, item in schemas.items():
+                schema_data = schema_fields[schema_name]
+                for condition_field, condition_value in schema_data['condition'].items():
+                    if condition_field in schemas and schemas[condition_field] != condition_value:
+                        try:
+                            del data_tree[instance][schema_name]
+                        except KeyError:
+                            continue
+
+        return data_tree
+
+    @property
+    def schema(self):
+        from wildlifecompliance.components.applications.utils import get_activity_schema
+        return get_activity_schema(self.licence_purposes.values_list('id', flat=True))
+
+    @property
+    def data(self):
+        """ returns a queryset of form data records attached to application (shortcut to ApplicationFormDataRecord related_name). """
+        return self.form_data_records.all()
+
+    @property
     def activities(self):
         """ returns a queryset of activities attached to application (shortcut to ApplicationSelectedActivity related_name). """
         return self.selected_activities.exclude(processing_status=ApplicationSelectedActivity.PROCESSING_STATUS_DISCARDED)
@@ -1170,6 +1321,21 @@ class Application(RevisionedMixin):
                                     )
             except BaseException:
                 raise
+
+    @staticmethod
+    def calculate_base_fees(selected_purpose_ids):
+        from wildlifecompliance.components.licences.models import LicencePurpose
+
+        base_fees = {
+            'application': Decimal(0.0),
+            'licence': Decimal(0.0),
+        }
+
+        for purpose in LicencePurpose.objects.filter(id__in=selected_purpose_ids):
+            base_fees['application'] += purpose.base_application_fee
+            base_fees['licence'] += purpose.base_licence_fee
+
+        return base_fees
 
 
 class ApplicationInvoice(models.Model):
@@ -1494,6 +1660,156 @@ class ApplicationSelectedActivity(models.Model):
 
 
 @python_2_unicode_compatible
+class ApplicationFormDataRecord(models.Model):
+
+    INSTANCE_ID_SEPARATOR = "__instance-"
+
+    ACTION_TYPE_ASSIGN_VALUE = 'value'
+    ACTION_TYPE_ASSIGN_COMMENT = 'comment'
+
+    COMPONENT_TYPE_TEXT = 'text'
+    COMPONENT_TYPE_TAB = 'tab'
+    COMPONENT_TYPE_SECTION = 'section'
+    COMPONENT_TYPE_GROUP = 'group'
+    COMPONENT_TYPE_NUMBER = 'number'
+    COMPONENT_TYPE_EMAIL = 'email'
+    COMPONENT_TYPE_SELECT = 'select'
+    COMPONENT_TYPE_MULTI_SELECT = 'multi-select'
+    COMPONENT_TYPE_TEXT_AREA = 'text_area'
+    COMPONENT_TYPE_TABLE = 'table'
+    COMPONENT_TYPE_EXPANDER_TABLE = 'expander_table'
+    COMPONENT_TYPE_LABEL = 'label'
+    COMPONENT_TYPE_RADIO = 'radiobuttons'
+    COMPONENT_TYPE_CHECKBOX = 'checkbox'
+    COMPONENT_TYPE_DECLARATION = 'declaration'
+    COMPONENT_TYPE_FILE = 'file'
+    COMPONENT_TYPE_DATE = 'date'
+    COMPONENT_TYPE_CHOICES = (
+        (COMPONENT_TYPE_TEXT, 'Text'),
+        (COMPONENT_TYPE_TAB, 'Tab'),
+        (COMPONENT_TYPE_SECTION, 'Section'),
+        (COMPONENT_TYPE_GROUP, 'Group'),
+        (COMPONENT_TYPE_NUMBER, 'Number'),
+        (COMPONENT_TYPE_EMAIL, 'Email'),
+        (COMPONENT_TYPE_SELECT, 'Select'),
+        (COMPONENT_TYPE_MULTI_SELECT, 'Multi-Select'),
+        (COMPONENT_TYPE_TEXT_AREA, 'Text Area'),
+        (COMPONENT_TYPE_TABLE, 'Table'),
+        (COMPONENT_TYPE_EXPANDER_TABLE, 'Expander Table'),
+        (COMPONENT_TYPE_LABEL, 'Label'),
+        (COMPONENT_TYPE_RADIO, 'Radio'),
+        (COMPONENT_TYPE_CHECKBOX, 'Checkbox'),
+        (COMPONENT_TYPE_DECLARATION, 'Declaration'),
+        (COMPONENT_TYPE_FILE, 'File'),
+        (COMPONENT_TYPE_DATE, 'Date'),
+    )
+
+    application = models.ForeignKey(Application, related_name='form_data_records')
+    field_name = models.CharField(max_length=512, null=True, blank=True)
+    schema_name = models.CharField(max_length=256, null=True, blank=True)
+    instance_name = models.CharField(max_length=256, null=True, blank=True)
+    component_type = models.CharField(
+        max_length=64,
+        choices=COMPONENT_TYPE_CHOICES,
+        default=COMPONENT_TYPE_TEXT)
+    value = JSONField(blank=True, null=True)
+    comment = models.TextField(blank=True)
+    deficiency = models.TextField(blank=True)
+
+    def __str__(self):
+        return "Application {id} record {field}".format(
+            id=self.application_id,
+            field=self.field_name
+        )
+
+    class Meta:
+        app_label = 'wildlifecompliance'
+        unique_together = ('application', 'field_name',)
+
+    @staticmethod
+    def process_form(request, application, form_data, action=ACTION_TYPE_ASSIGN_VALUE):
+        from wildlifecompliance.components.applications.utils import MissingFieldsException
+        can_edit_comments = request.user.has_perm(
+            'wildlifecompliance.licensing_officer'
+        ) or request.user.has_perm(
+            'wildlifecompliance.assessor'
+        )
+        can_edit_deficiencies = request.user.has_perm(
+            'wildlifecompliance.licensing_officer'
+        )
+
+        if action == ApplicationFormDataRecord.ACTION_TYPE_ASSIGN_COMMENT and\
+                not can_edit_comments and not can_edit_deficiencies:
+            raise Exception(
+                'You are not authorised to perform this action!')
+
+        is_draft = form_data.pop('__draft', False)
+        visible_data_tree = application.get_visible_form_data_tree(form_data.items())
+        required_fields = application.required_fields
+        missing_fields = []
+
+        for field_name, field_data in form_data.items():
+            schema_name = field_data.get('schema_name', '')
+            instance_name = field_data.get('instance_name', '')
+            component_type = field_data.get('component_type', '')
+            value = field_data.get('value', '')
+            comment = field_data.get('comment_value', '')
+            deficiency = field_data.get('deficiency_value', '')
+
+            if ApplicationFormDataRecord.INSTANCE_ID_SEPARATOR in field_name:
+                [parsed_schema_name, parsed_instance_name] = field_name.split(
+                    ApplicationFormDataRecord.INSTANCE_ID_SEPARATOR
+                )
+                schema_name = schema_name if schema_name else parsed_schema_name
+                instance_name = instance_name if instance_name else parsed_instance_name
+
+            try:
+                visible_data_tree[instance_name][schema_name]
+            except KeyError:
+                continue
+
+            form_data_record = ApplicationFormDataRecord.objects.filter(
+                application_id=application.id,
+                field_name=field_name,
+            ).first()
+
+            if not form_data_record:
+                form_data_record = ApplicationFormDataRecord.objects.create(
+                    application_id=application.id,
+                    field_name=field_name,
+                    schema_name=schema_name,
+                    instance_name=instance_name,
+                    component_type=component_type,
+                )
+            if action == ApplicationFormDataRecord.ACTION_TYPE_ASSIGN_VALUE:
+                if not is_draft and not value and schema_name in required_fields:
+                    missing_item = {'field_name': field_name}
+                    missing_item.update(required_fields[schema_name])
+                    missing_fields.append(missing_item)
+                    continue
+                form_data_record.value = value
+            elif action == ApplicationFormDataRecord.ACTION_TYPE_ASSIGN_COMMENT:
+                if can_edit_comments:
+                    form_data_record.comment = comment
+                if can_edit_deficiencies:
+                    form_data_record.deficiency = deficiency
+            form_data_record.save()
+
+        if action == ApplicationFormDataRecord.ACTION_TYPE_ASSIGN_VALUE:
+            application.update_fees()
+            for existing_field in ApplicationFormDataRecord.objects.filter(application_id=application.id):
+                if existing_field.field_name not in form_data.keys():
+                    existing_field.delete()
+
+        if missing_fields:
+            raise MissingFieldsException(
+                [{'name': item['field_name'], 'label': '{label}'.format(
+                    label=item['label']
+                )} for item in missing_fields]
+            )
+
+
+@python_2_unicode_compatible
 class ApplicationStandardCondition(RevisionedMixin):
     text = models.TextField()
     code = models.CharField(max_length=10, unique=True)
@@ -1615,89 +1931,3 @@ class ApplicationUserAction(UserAction):
 def delete_documents(sender, instance, *args, **kwargs):
     for document in instance.documents.all():
         document.delete()
-
-
-def search_keywords(search_words, search_application, search_licence, search_return, is_internal=True):
-    from wildlifecompliance.utils import search, search_licences, search_returns
-    from wildlifecompliance.components.licences.models import WildlifeLicence
-    from wildlifecompliance.components.returns.models import Return
-    qs = []
-    if is_internal:
-        application_list = Application.objects.all().computed_exclude(processing_status__in=[
-            Application.PROCESSING_STATUS_DISCARDED,
-            Application.PROCESSING_STATUS_DRAFT
-        ])
-        licence_list = WildlifeLicence.objects.all()\
-            .order_by('licence_number', '-id')\
-            .distinct('licence_number')
-        return_list = Return.objects.all()
-    if search_words:
-        if search_application:
-            for a in application_list:
-                if a.data:
-                    try:
-                        results = search(a.data[0], search_words)
-                        final_results = {}
-                        if results:
-                            for r in results:
-                                for key, value in r.iteritems():
-                                    final_results.update({'key': key, 'value': value})
-                            res = {
-                                'number': a.lodgement_number,
-                                'id': a.id,
-                                'type': 'Application',
-                                'applicant': a.applicant.name,
-                                'text': final_results,
-                            }
-                            qs.append(res)
-                    except BaseException:
-                        raise
-        # TODO: fix search_licences (missing fields in wildlifecompliance)
-        """
-        if search_licence:
-            for l in licence_list:
-                try:
-                    results = search_licences(l, search_words)
-                    qs.extend(results)
-                except BaseException:
-                    raise
-        """
-        if search_return:
-            for r in return_list:
-                try:
-                    results = search_returns(r, search_words)
-                    qs.extend(results)
-                except BaseException:
-                    raise
-        return qs
-
-
-def search_reference(reference_number):
-    from wildlifecompliance.components.licences.models import WildlifeLicence
-    from wildlifecompliance.components.returns.models import Return
-    application_list = Application.objects.all().computed_exclude(processing_status__in=[
-        Application.PROCESSING_STATUS_DISCARDED])
-    licence_list = WildlifeLicence.objects.all().order_by('lodgement_number', '-issue_date').distinct('lodgement_number')
-    returns_list = Return.objects.all().exclude(processing_status__in=[Return.RETURN_PROCESSING_STATUS_FUTURE])
-    record = {}
-    try:
-        result = application_list.get(lodgement_number=reference_number)
-        record = {'id': result.id,
-                  'type': 'application'}
-    except Application.DoesNotExist:
-        try:
-            result = licence_list.get(lodgement_number=reference_number)
-            record = {'id': result.id,
-                      'type': 'licence'}
-        except WildlifeLicence.DoesNotExist:
-            try:
-                for r in returns_list:
-                    if r.reference == reference_number:
-                        record = {'id': r.id,
-                                  'type': 'compliance'}
-            except BaseException:
-                raise ValidationError('Record with provided reference number does not exist')
-    if record:
-        return record
-    else:
-        raise ValidationError('Record with provided reference number does not exist')
