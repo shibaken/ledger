@@ -163,6 +163,7 @@ class Compliance(RevisionedMixin):
 
     def assign_to(self, user,request):
         with transaction.atomic():
+            #import ipdb; ipdb.set_trace()
             self.assigned_to = user
             self.save()
             self.log_user_action(ComplianceUserAction.ACTION_ASSIGN_TO.format(user.get_full_name()),request)
@@ -333,7 +334,8 @@ class ComplianceAmendmentRequest(CompRequest):
             # Create a log entry for the proposal
             compliance.log_user_action(ComplianceUserAction.ACTION_ID_REQUEST_AMENDMENTS,request)
             # Create a log entry for the organisation
-            compliance.proposal.applicant.log_user_action(ComplianceUserAction.ACTION_ID_REQUEST_AMENDMENTS,request)
+            applicant_field=getattr(compliance.proposal, compliance.proposal.applicant_field)
+            applicant_field.log_user_action(ComplianceUserAction.ACTION_ID_REQUEST_AMENDMENTS,request)
             send_amendment_email_notification(self,request, compliance)
 
 
@@ -342,13 +344,24 @@ def update_proposal_complaince_filename(instance, filename):
 
 
 
+#import reversion
+#reversion.register(Compliance, follow=['documents', 'action_logs', 'comms_logs'])
+#reversion.register(ComplianceDocument)
+#reversion.register(ComplianceUserAction)
+#reversion.register(ComplianceLogEntry)
+#reversion.register(ComplianceLogDocument)
+#reversion.register(CompRequest)
+#reversion.register(ComplianceAmendmentReason)
+#reversion.register(ComplianceAmendmentRequest)
+
 import reversion
-reversion.register(Compliance, follow=['documents', 'action_logs', 'comms_logs'])
+reversion.register(Compliance, follow=['documents', 'action_logs', 'comms_logs', 'comprequest_set'])
 reversion.register(ComplianceDocument)
 reversion.register(ComplianceUserAction)
-reversion.register(ComplianceLogEntry)
+reversion.register(ComplianceLogEntry, follow=['documents'])
 reversion.register(ComplianceLogDocument)
 reversion.register(CompRequest)
-reversion.register(ComplianceAmendmentReason)
+reversion.register(ComplianceAmendmentReason, follow=['complianceamendmentrequest_set'])
 reversion.register(ComplianceAmendmentRequest)
+
 
