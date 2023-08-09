@@ -16,7 +16,8 @@ INSTALLED_APPS += [
     'rest_framework_gis',
     'crispy_forms',
     'ledgergw',
-    'webtemplate_dbca'
+    'webtemplate_dbca',
+
 ]
 
 MIDDLEWARE_CLASSES += [
@@ -75,6 +76,7 @@ OSCAR_BASKET_COOKIE_OPEN = 'ledgergw_basket'
 
 CRON_CLASSES = [
         'ledgergw.cron.OracleReceipts',
+        'ledgergw.cron.JobQueue'
 ]
 
 # Additional logging

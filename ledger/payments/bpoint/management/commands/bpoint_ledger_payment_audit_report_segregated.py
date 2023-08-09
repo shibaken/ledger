@@ -22,6 +22,7 @@ class Command(BaseCommand):
          yesterday = datetime.today() - timedelta(days=1)
          settlement_date_search = yesterday.strftime("%Y%m%d")
          parser.add_argument('settlement_date', nargs='?', default=settlement_date_search)
+         parser.add_argument('system_id', nargs='?', default=None)
 
     def handle(self, *args, **options):
            
@@ -31,7 +32,11 @@ class Command(BaseCommand):
            SYSTEM_ID = ''
            #if settings.PS_PAYMENT_SYSTEM_ID:
            #       SYSTEM_ID = settings.PS_PAYMENT_SYSTEM_ID.replace("S","0")
-           ois = payment_models.OracleInterfaceSystem.objects.filter(integration_type='bpoint_api',enabled=True)
+           ois = None
+           if options['system_id']:
+                ois = payment_models.OracleInterfaceSystem.objects.filter(integration_type='bpoint_api',enabled=True, system_id=options['system_id'])
+           else:
+                ois = payment_models.OracleInterfaceSystem.objects.filter(integration_type='bpoint_api',enabled=True)
            for oracle_system in ois:
                rows = []
                print (oracle_system)
@@ -83,9 +88,14 @@ class Command(BaseCommand):
                for c in b:
                     if c.bank_response_code == '00' and c.response_code == '0':
                         amount = str(c.amount)[:-2]+'.'+str(c.amount)[-2:]
+                        # Skip reversal as these do not impact bpoint settlement totals
+                        if c.action == 'reversal':
+                            continue
+
                         if c.action == 'refund':
                             bpoint_amount = bpoint_amount - c.amount
-                        #elif c.action == 'reversal':
+                        elif c.action == 'reversal':
+                             pass
                         #    bpoint_amount = bpoint_amount - c.amount
                         else:
                             bpoint_amount = bpoint_amount + c.amount
@@ -98,6 +108,8 @@ class Command(BaseCommand):
                             ledger_payment_settlement_date = bp[0].settlement_date 
                             if bp[0].action == 'refund':
                                 ledger_payment_amount = ledger_payment_amount - bp[0].amount
+                            elif bp[0].action == 'reversal':
+                                pass
                             else:
                                 ledger_payment_amount = ledger_payment_amount + bp[0].amount
                         bp_lpb_diff = float(bpoint_amount_nice) - float(ledger_payment_amount)

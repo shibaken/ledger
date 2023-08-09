@@ -7,7 +7,7 @@ from ledger.payments.bpoint.models import BpointTransaction, BpointToken
 from django.conf import settings
 from datetime import timedelta, datetime
 from ledger.payments.bpoint.facade import Facade
-from ledger.payments.models import OracleInterfaceSystem, OracleInterface, OracleParser, OracleParserInvoice 
+from ledger.payments.models import OracleInterfaceSystem, OracleInterface, OracleParser, OracleParserInvoice, OracleInterfaceReportReceipient
 from ledger.emails.emails import sendHtmlEmail
 import json
 
@@ -164,7 +164,12 @@ class Command(BaseCommand):
                   'parser_invoice_totals_rolling_totals' : parser_invoice_totals_rolling_totals
               }
               email_list = []
-              for email_to in settings.NOTIFICATION_EMAIL.split(","):
-                     email_list.append(email_to)
+            #   for email_to in settings.NOTIFICATION_EMAIL.split(","):
+            #          email_list.append(email_to)
+
+              oirr = OracleInterfaceReportReceipient.objects.filter(system=ofs)
+              for rr in oirr:
+                    print (rr.email)
+                    email_list.append(rr.email)                     
               sendHtmlEmail(tuple(email_list),"[LEDGER] Bpoint Ledger Payment Audit Report for "+str(settlement_date_search)+" "+SYSTEM_ID,context,'email/bpoint_ledger_payment_audit.html',None,None,settings.EMAIL_FROM,'system-oim',attachments=None)
                     
