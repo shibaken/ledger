@@ -13,7 +13,7 @@ from django.core.exceptions import ValidationError
 from django.core.urlresolvers import resolve
 from six.moves.urllib.parse import urlparse
 #
-from ledger.payments.models import OracleParser, OracleParserInvoice, Invoice, OracleInterface, OracleInterfaceSystem, BpointTransaction, BpayTransaction, OracleAccountCode, OracleOpenPeriod, OracleInterfaceDeduction, OracleInterfaceSystem, LinkedInvoiceGroupIncrementer, LinkedInvoice
+from ledger.payments.models import OracleParser, OracleParserInvoice, Invoice, OracleInterface, OracleInterfaceSystem, OracleInterfacePermission, BpointTransaction, BpayTransaction, OracleAccountCode, OracleOpenPeriod, OracleInterfaceDeduction, OracleInterfaceSystem, LinkedInvoiceGroupIncrementer, LinkedInvoice
 #from ledger.payments.invoice import utils
 #from oscar.apps.order.models import Order
 from ledger.order.models import Order
@@ -957,9 +957,11 @@ def ledger_payment_invoice_calulations(invoice_group_id, invoice_no, booking_ref
                              invoices.append(li.invoice_reference)
                              inv = Invoice.objects.filter(reference=li.invoice_reference)
                              settlement_date = ''
+                             oracle_invoice_number = ''
                              if inv.count() > 0:
                                  settlement_date = inv[0].settlement_date.strftime("%d/%m/%Y")
-                             linked_payments.append({'id': li.id, 'invoice_reference': li.invoice_reference, 'system_identifier_id': li.system_identifier.id, 'system_identifier_system': li.system_identifier.system_id, 'booking_reference': li.booking_reference, 'booking_reference_linked': li.booking_reference_linked, 'invoice_group_id': li.invoice_group_id.id,'settlement_date': settlement_date})
+                                 oracle_invoice_number = inv[0].oracle_invoice_number
+                             linked_payments.append({'id': li.id, 'invoice_reference': li.invoice_reference, 'system_identifier_id': li.system_identifier.id, 'system_identifier_system': li.system_identifier.system_id, 'booking_reference': li.booking_reference, 'booking_reference_linked': li.booking_reference_linked, 'invoice_group_id': li.invoice_group_id.id,'settlement_date': settlement_date, 'oracle_invoice_number': oracle_invoice_number})
                              if li.booking_reference not in linked_payments_booking_references:
                                 linked_payments_booking_references.append(li.booking_reference)
                              if li.booking_reference_linked not in linked_payments_booking_references:
@@ -1150,3 +1152,29 @@ def ledger_payment_invoice_calulations(invoice_group_id, invoice_no, booking_ref
             data['data']['booking_reference_linked'] = ''
             
         return data
+
+def get_oracle_interface_system_permissions(system_id, email):
+
+    system_interface_permssions = {
+        'all_access': False,
+        'view_ledger_tools' : False,
+        'manage_ledger_tool' : False,
+        'view_payment_totals' : False,
+    }
+
+    ois = OracleInterfaceSystem.objects.filter(system_id=system_id) 
+    if ois.count() > 0:
+        ois_permissions = OracleInterfacePermission.objects.filter(system=ois[0],email=email)
+        for oisp in ois_permissions:
+            if oisp.access_type == 'all_access':
+                system_interface_permssions['all_access'] = True
+            if oisp.access_type == 'view_ledger_tools':
+                system_interface_permssions['view_ledger_tools'] = True
+            if oisp.access_type == 'manage_ledger_tool':
+                system_interface_permssions['manage_ledger_tool'] = True                
+            if oisp.access_type == 'view_payment_totals':
+                system_interface_permssions['view_payment_totals'] = True                  
+    return system_interface_permssions
+
+
+

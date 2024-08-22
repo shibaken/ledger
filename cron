@@ -1,8 +1,10 @@
 #*/2 * * * * root  export $(grep -v '^#' /etc/.cronenv | xargs -d '\n') && python /app/manage_ledgergw.py test_email >>  /tmp/test_email.log 2>&1
 #
 0 4 * * * root eval $(grep -v '^#' /etc/.cronenv | xargs -d "\n" -I {} echo export \"{}\"  ) && python /app/manage_ledgergw.py collectbpay /mnt/external/CommBiz_WildlifeLicensing 2>&1 | logger -t wl_collectbpay
+0 1 * * * root eval $(grep -v '^#' /etc/.cronenv | xargs -d "\n" -I {} echo export \"{}\"  ) && python /app/manage_ledgergw.py cba_sync >> /app/logs/cba_sync.log
+
 # Uncomment once every one on the new code
-0 8,10,12,14,16,18 * * * root eval $(grep -v '^#' /etc/.cronenv | xargs -d "\n" -I {} echo export \"{}\"  ) && python /app/manage_ledgergw.py sync_itassets_users >> /app/logs/sync_ad_users.log 
+0 8,10,12,14,16,18 * * * root eval $(grep -v '^#' /etc/.cronenv | xargs -d "\n" -I {} echo export \"{}\"  ) && python /app/manage_ledgergw.py sync_itassets_users >> /app/logs/sync_ad_users.log
 */5 * * * *  root eval $(grep -v '^#' /etc/.cronenv | xargs -d "\n" -I {} echo export \"{}\"  ) && python /app/manage_ledgergw.py runcrons >> /app/logs/runcrons.log
 
 # Ledger Audit Report
@@ -21,3 +23,6 @@
 
 #Rotate Backups
 30 6 * * 0 root /app/bin/rotate_backups.sh
+
+# App Monitor Client
+10 9 * * 0 root eval $(grep -v '^#' /etc/.cronenv | xargs -d "\n" -I {} echo export \"{}\" ) && python3 /app/manage_ledgergw.py appmonitor_check >> /app/logs/appmonitor_client.log 2>&1

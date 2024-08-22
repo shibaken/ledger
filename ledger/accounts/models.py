@@ -287,6 +287,10 @@ class EmailUser(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True, blank=False)
     first_name = models.CharField(max_length=128, blank=False, verbose_name='Given name(s)')
     last_name = models.CharField(max_length=128, blank=False)
+
+    legal_first_name = models.CharField(max_length=128, null=True, blank=True, verbose_name='Legal Given name(s)')
+    legal_last_name = models.CharField(max_length=128, null=True, blank=True)
+
     is_staff = models.BooleanField(
         default=False,
         help_text='Designates whether the user can log into the admin site.',
@@ -309,6 +313,8 @@ class EmailUser(AbstractBaseUser, PermissionsMixin):
                              verbose_name='title', help_text='')
     dob = models.DateField(auto_now=False, auto_now_add=False, null=True, blank=False,
                            verbose_name="date of birth", help_text='')
+    legal_dob = models.DateField(auto_now=False, auto_now_add=False, null=True, blank=True,
+                           verbose_name="Legal date of birth", help_text='')
     phone_number = models.CharField(max_length=50, null=True, blank=True,
                                     verbose_name="phone number", help_text='')
     position_title = models.CharField(max_length=100, null=True, blank=True,
@@ -398,8 +404,18 @@ class EmailUser(AbstractBaseUser, PermissionsMixin):
         super(EmailUser, self).save(*args, **kwargs)
 
     def get_full_name(self):
+
         full_name = '{} {}'.format(self.first_name, self.last_name)
-        #.encode('utf-8').strip()
+        if self.legal_first_name and self.legal_last_name:
+            legal_first_name = ''
+            legal_last_name = ''
+            if len(self.legal_first_name) > 0:
+                legal_first_name = self.legal_first_name
+            if len(self.legal_last_name) > 0:
+                legal_last_name = self.legal_last_name
+            if len(legal_first_name) > 0:
+                full_name = '{} {}'.format(legal_first_name, legal_last_name)
+        
         return full_name
 
     def get_full_name_dob(self):
@@ -578,6 +594,17 @@ class EmailUserAction(UserAction):
             who=user,
             what=str(action)
         )
+
+class EmailUserChangeLog(models.Model):
+    emailuser = models.ForeignKey(EmailUser, related_name='change_log_email_user')
+    change_key = models.CharField(max_length=1024, blank=True, null=True)
+    change_value = models.CharField(max_length=1024, blank=True, null=True)
+    change_by = models.ForeignKey(EmailUser, related_name='change_log_request_user', blank=True, null=True)
+    created = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+
+    class Meta:
+        app_label = 'accounts'
+        ordering = ['-created']
 
 class CommunicationsLogEntry(models.Model):
     TYPE_CHOICES = [

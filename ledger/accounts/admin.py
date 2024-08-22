@@ -7,7 +7,7 @@ from django.contrib.auth.models import Group
 
 from reversion.admin import VersionAdmin
 
-from ledger.accounts.models import EmailUser, Document, PrivateDocument, Address, Profile, Organisation, OrganisationAddress 
+from ledger.accounts.models import EmailUser,EmailUserAction, UserAction, EmailUserChangeLog, Document, PrivateDocument, Address, Profile, Organisation, OrganisationAddress 
 from ledger.accounts.forms import ProfileAdminForm
 
 
@@ -25,7 +25,7 @@ class EmailUserAdmin(UserAdmin):
     )
     fieldsets = (
         (None, {'fields': ('email',)}),
-        ('Personal info', {'fields': ('first_name', 'last_name','position_title', 'dob', 'identification','identification2','senior_card','senior_card2','title','character_flagged', 'character_comments','manager_name','manager_email', 'phone_number', 'mobile_number','residential_address','postal_address','postal_same_as_residential','billing_address','billing_same_as_residential' )}),
+        ('Personal info', {'fields': ('first_name', 'last_name','legal_first_name', 'legal_last_name','position_title', 'dob','legal_dob', 'identification','identification2','senior_card','senior_card2','title','character_flagged', 'character_comments','manager_name','manager_email', 'phone_number', 'mobile_number','residential_address','postal_address','postal_same_as_residential','billing_address','billing_same_as_residential')}),
         ('Permissions', {'fields': (
             'is_active', 'is_staff', 'is_superuser', 'groups')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
@@ -52,7 +52,7 @@ class EmailUserAdmin(UserAdmin):
     list_display = ('email', 'first_name', 'last_name', 'is_staff', 'is_dummy')
     ordering = ('email',)
     search_fields = ('email', 'first_name', 'last_name', 'email')
-    readonly_fields = ('dummy_email','phone_number', 'mobile_number', 'position_title','manager_email','manager_name','residential_address','postal_address','billing_address',)
+    readonly_fields = ('dummy_email','phone_number', 'mobile_number', 'position_title','manager_email','manager_name','residential_address','postal_address','billing_address','legal_first_name','legal_last_name','legal_dob')
 
     def is_dummy(self, o):
         return o.is_dummy_user
@@ -82,6 +82,16 @@ class EmailUserAdmin(UserAdmin):
         if settings.SYSTEM_GROUPS and db_field.name == "groups" and not request.user.is_superuser:
             kwargs["queryset"] = Group.objects.filter(name__in=settings.SYSTEM_GROUPS)
         return super(EmailUserAdmin, self).formfield_for_manytomany(db_field, request, **kwargs)
+
+@admin.register(EmailUserAction)
+class EmailUserActionAdmin(admin.ModelAdmin):
+    model = EmailUserAction
+
+@admin.register(EmailUserChangeLog)
+class EmailUserChangeLogAdmin(admin.ModelAdmin):
+    model = EmailUserChangeLog
+    list_display = ('id','emailuser','change_key', 'change_value', 'change_by','created')
+    ordering = ('-id',)
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):

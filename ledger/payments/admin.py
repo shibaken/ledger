@@ -26,10 +26,10 @@ class CashAdmin(admin.ModelAdmin):
 
 @admin.register(models.Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
-    list_display = ('reference','order','payment_status','settlement_date','amount', 'system','created' )
+    list_display = ('reference','oracle_invoice_number','order','payment_status','settlement_date','amount', 'system','created' )
     search_fields = ('reference',)
     list_filter = ('system'),    
-    raw_id_fields = ('previous_invoice',)
+    raw_id_fields = ('previous_invoice','oracle_invoice_file')
     list_per_page = 30
 
 @admin.register(models.InvoiceBPAY)
@@ -131,10 +131,14 @@ class OracleInterfaceDeductionInline(admin.TabularInline):
     model = models.OracleInterfaceDeduction
     extra = 1
 
+class OracleInterfacePermissionInline(admin.TabularInline):
+    model = models.OracleInterfacePermission
+    extra = 1
+
 @admin.register(models.OracleInterfaceSystem)
 class OracleInterfaceSystemAdmin(admin.ModelAdmin):
     list_display = ('system_name','system_id')
-    inlines = [OracleInterfaceRecipientInline, OracleInterfaceReportReceipientInline, OracleInterfaceDeductionInline] 
+    inlines = [OracleInterfacePermissionInline, OracleInterfaceRecipientInline, OracleInterfaceReportReceipientInline, OracleInterfaceDeductionInline, ] 
 
 @admin.register(models.OracleAccountCode)
 class OracleAccountCode(admin.ModelAdmin):
@@ -177,3 +181,7 @@ class PaymentTotal(admin.ModelAdmin):
 
      discrepancy.allow_tags = True
      difference.allow_tags = True
+
+@admin.register(models.PaymentInformationLink)
+class PaymentInformationLinkAdmin(admin.ModelAdmin):
+    list_display = ('title','active','created')

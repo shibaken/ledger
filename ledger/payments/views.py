@@ -12,6 +12,8 @@ from ledger.payments.pdf import create_invoice_pdf_bytes
 from ledger.payments.utils import checkURL
 from ledger.payments.cash.models import REGION_CHOICES
 from ledger.payments.utils import systemid_check, update_payments, ledger_payment_invoice_calulations 
+from ledger.payments import utils as payments_utils
+from ledger.payments.bpoint.models import BpointTransaction
 #
 #from oscar.apps.order.models import Order
 from ledger.order.models import Order
@@ -69,14 +71,54 @@ class OraclePayments(generic.TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super(OraclePayments,self).get_context_data(**kwargs)
         if helpers.is_payment_admin(self.request.user) is True:
-            invoice_group_id = self.request.GET.get('invoice_group_id','');
+            invoice_group_id = self.request.GET.get('invoice_group_id','')
             invoice_no = self.request.GET.get('invoice_no','')
             booking_reference = self.request.GET.get('booking_reference','')
             receipt_no = self.request.GET.get('receipt_no','')
             txn_number = self.request.GET.get('txn_number','')
             ctx['payment_oracle_admin'] = helpers.is_payment_oracle_admin(self.request.user)
             #&cur    rent_invoice_no="+ledger_payments.var.current_invoice_no+"&current_booking_reference="+ledger_payments.var.current_booking_reference,
-              
+
+            system_id = ''
+            if len(invoice_no) > 4:
+                system_id = invoice_no[0:4]
+            if len(booking_reference) > 3:
+                li = LinkedInvoice.objects.filter(booking_reference=booking_reference)
+                if li.count() > 0:
+                    system_id = li[0].invoice_reference[0:4]
+            if len(invoice_group_id) > 0:
+                li = LinkedInvoice.objects.filter(invoice_group_id=invoice_group_id)
+                if li.count() > 0:
+                    system_id = li[0].invoice_reference[0:4]
+
+            if len(txn_number) > 0:
+                bt = BpointTransaction.objects.filter(txn_number=txn_number)
+                crn1=None
+                if bt.count() > 0:
+                    crn1 = bt[0].crn1
+                    li = LinkedInvoice.objects.filter(invoice_reference=crn1)
+                    if li.count() > 0:
+                        system_id = li[0].invoice_reference[0:4]
+
+            if len(receipt_no) > 0:
+                bt = BpointTransaction.objects.filter(receipt_number=receipt_no)
+                crn1=None
+                if bt.count() > 0:
+                    crn1 = bt[0].crn1
+                    li = LinkedInvoice.objects.filter(invoice_reference=crn1)
+                    if li.count() > 0:
+                        system_id = li[0].invoice_reference[0:4]
+
+
+            
+            ois = payments_models.OracleInterfaceSystem.objects.filter(system_id=system_id) 
+            ois_found = False
+            if ois.count() > 0:
+                ois_found = True
+                isp = payments_utils.get_oracle_interface_system_permissions(system_id,self.request.user.email)    
+                ctx['system_interface_permssions'] = isp
+
+            ctx['ois_found'] = ois_found
             ctx['invoice_group_id'] = invoice_group_id
             ctx['invoice_no'] = invoice_no
             ctx['booking_reference'] = booking_reference
@@ -105,6 +147,16 @@ class LinkedInvoiceIssue(generic.TemplateView):
                 if int(invoice_group_id) > 0:
                     linkinv = LinkedInvoice.objects.filter(invoice_group_id=invoice_group_id)
                     if linkinv.count() > 0:
+                        system_id = linkinv[0].invoice_reference[0:4]
+
+                        ois = payments_models.OracleInterfaceSystem.objects.filter(system_id=system_id) 
+                        ois_found = False
+                        if ois.count() > 0:
+                            ois_found = True
+                            isp = payments_utils.get_oracle_interface_system_permissions(system_id,self.request.user.email) 
+                            ctx['system_interface_permssions'] = isp
+                        ctx['ois_found'] = ois_found
+
                         # invoice_group = LinkedInvoice.objects.filter(invoice_group_id=invoice_group_id).order_by('-created')[0]
 
                         # invoice_group_checks = LinkedInvoice.objects.filter(Q(booking_reference__in=linked_payments_booking_references) | Q(booking_reference_linked__in=linked_payments_booking_references)).values('invoice_group_id_id').annotate(total=Count('invoice_group_id_id')).order_by('total')
@@ -157,82 +209,94 @@ class LinkedPaymentIssue(generic.TemplateView):
             linked_payments_booking_references = []
             linked_group_issue = False
             if invoice_group_id:
+                linkinv = LinkedInvoice.objects.filter(invoice_group_id=invoice_group_id)
+                if linkinv.count() > 0:
+                    system_id = linkinv[0].invoice_reference[0:4]
+
+                    ois = payments_models.OracleInterfaceSystem.objects.filter(system_id=system_id) 
+                    ois_found = False
+                    if ois.count() > 0:
+                        ois_found = True
+                        isp = payments_utils.get_oracle_interface_system_permissions(system_id,self.request.user.email) 
+                        ctx['system_interface_permssions'] = isp
+                    ctx['ois_found'] = ois_found
+
                 lpic = ledger_payment_invoice_calulations(invoice_group_id, None, None, None, None)
                 total_difference_of_gw_and_oracle = D(lpic['data']['total_gateway_amount']) - D(lpic['data']['total_oracle_amount'])
 
                 #if D(lpic['data']['total_gateway_amount']) >= total_difference_of_gw_and_oracle:
-                if  D(lpic['data']['total_gateway_amount']) != D(lpic['data']['total_oracle_amount']):
-                    bp_hash = {}
-                    inv_hash = {}
-                    for bp_data in lpic['data']['bpoint']:
-                        hashstr = str(str(bp_data['settlement_date'])).replace("/","").replace(".","").replace("-","")
-                        #hashstr = str(str(bp_data['settlement_date']) + str(bp_data['amount'])).replace("/","").replace(".","").replace("-","")
-                        if hashstr not in bp_hash:
-                            bp_hash[hashstr] = {    'total_payments':  0, 
-                                                    'total_refunds':  0, 
-                                                    'total_amount': '0.00',
-                                                    'amount': '0.00', 
-                                                    'settlement_date': bp_data['settlement_date'],                                                                                                                                                                                                      
-                                                }
+                #if  D(lpic['data']['total_gateway_amount']) != D(lpic['data']['total_oracle_amount']):
+                bp_hash = {}
+                inv_hash = {}
+                for bp_data in lpic['data']['bpoint']:
+                    hashstr = str(str(bp_data['settlement_date'])).replace("/","").replace(".","").replace("-","")
+                    #hashstr = str(str(bp_data['settlement_date']) + str(bp_data['amount'])).replace("/","").replace(".","").replace("-","")
+                    if hashstr not in bp_hash:
+                        bp_hash[hashstr] = {    'total_payments':  0, 
+                                                'total_refunds':  0, 
+                                                'total_amount': '0.00',
+                                                'amount': '0.00', 
+                                                'settlement_date': bp_data['settlement_date'],                                                                                                                                                                                                      
+                                            }
 
-                        if hashstr in bp_hash:
-                            if bp_data['action'] == 'payment':
-                                bp_hash[hashstr]['total_payments'] = bp_hash[hashstr]['total_payments'] + 1
-                                bp_hash[hashstr]['total_amount'] = str(D(bp_hash[hashstr]['total_amount']) + D(bp_data['amount']))
-                            elif bp_data['action'] == 'refund':
-                                bp_hash[hashstr]['total_refunds'] = bp_hash[hashstr]['total_refunds'] + 1
-                                bp_hash[hashstr]['total_amount'] = str(D(bp_hash[hashstr]['total_amount']) - D(bp_data['amount']))                           
+                    if hashstr in bp_hash:
+                        if bp_data['action'] == 'payment':
+                            bp_hash[hashstr]['total_payments'] = bp_hash[hashstr]['total_payments'] + 1
+                            bp_hash[hashstr]['total_amount'] = str(D(bp_hash[hashstr]['total_amount']) + D(bp_data['amount']))
+                        elif bp_data['action'] == 'refund':
+                            bp_hash[hashstr]['total_refunds'] = bp_hash[hashstr]['total_refunds'] + 1
+                            bp_hash[hashstr]['total_amount'] = str(D(bp_hash[hashstr]['total_amount']) - D(bp_data['amount']))                           
 
-                    for inv_data in lpic['data']['invoices_data']:
-                        hashstr = str(str(inv_data['settlement_date'])).replace("/","").replace(".","").replace("-","")                        
-                        if hashstr in inv_hash:
-                            inv_hash[hashstr]['total'] = inv_hash[hashstr]['total'] + 1
-                            inv_hash[hashstr]['total_amount'] = str(D(inv_hash[hashstr]['total_amount']) + D(inv_data['amount']))
-                        else:
-                            inv_hash[hashstr] = {'total':  1, 'total_amount' : inv_data['amount'], 'amount': inv_data['amount'], 'settlement_date': inv_data['settlement_date']} 
+                for inv_data in lpic['data']['invoices_data']:
+                    hashstr = str(str(inv_data['settlement_date'])).replace("/","").replace(".","").replace("-","")                        
+                    if hashstr in inv_hash:
+                        inv_hash[hashstr]['total'] = inv_hash[hashstr]['total'] + 1
+                        inv_hash[hashstr]['total_amount'] = str(D(inv_hash[hashstr]['total_amount']) + D(inv_data['amount']))
+                    else:
+                        inv_hash[hashstr] = {'total':  1, 'total_amount' : inv_data['amount'], 'amount': inv_data['amount'], 'settlement_date': inv_data['settlement_date']} 
 
-                    for bp_keys in bp_hash:
-                        if bp_keys in inv_hash:
-                            total_trans = bp_hash[bp_keys]['total_refunds'] - inv_hash[bp_keys]['total']
-                            total_amount = str(D(bp_hash[bp_keys]['total_amount']) - D(inv_hash[bp_keys]['total_amount']))
-                        else:
-                            total_trans = bp_hash[bp_keys]['total_refunds'] - float('0.00')
-                            total_amount = str(D(bp_hash[bp_keys]['total_amount']) - D('0.00'))
+                for bp_keys in bp_hash:
+                    if bp_keys in inv_hash:
+                        total_trans = bp_hash[bp_keys]['total_refunds'] - inv_hash[bp_keys]['total']
+                        total_amount = str(D(bp_hash[bp_keys]['total_amount']) - D(inv_hash[bp_keys]['total_amount']))
+                    else:
+                        total_trans = bp_hash[bp_keys]['total_refunds'] - float('0.00')
+                        total_amount = str(D(bp_hash[bp_keys]['total_amount']) - D('0.00'))
 
-                        if D(total_amount) > 0 and bp_hash[bp_keys]['total_payments'] > 0:
-                            generate_receipts_for.append({"total_amount": total_amount, "settlement_date": bp_hash[bp_keys]['settlement_date']})
-                        if D(total_amount) < 0 and bp_hash[bp_keys]['total_refunds'] > 0:
-                            generate_receipts_for.append({"total_amount": total_amount, "settlement_date": bp_hash[bp_keys]['settlement_date']})
+                    if D(total_amount) > 0 and bp_hash[bp_keys]['total_payments'] > 0:
+                        generate_receipts_for.append({"total_amount": total_amount, "settlement_date": bp_hash[bp_keys]['settlement_date']})
+                    if D(total_amount) < 0 and bp_hash[bp_keys]['total_refunds'] > 0:
+                        generate_receipts_for.append({"total_amount": total_amount, "settlement_date": bp_hash[bp_keys]['settlement_date']})
 
 
-                    for inv_keys in inv_hash:
-                        if inv_keys not in bp_hash:
-                      
-                            if inv_keys in inv_hash: 
-                                if D(inv_hash[inv_keys]['total_amount']) > 0:
-                                    pass
-                                    print ("Reverse Payment")
-                                    total_amount = D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount'])
-                                    generate_receipts_for.append({"total_amount": total_amount, "settlement_date": inv_hash[inv_keys]['settlement_date']})  
-                                if D(inv_hash[inv_keys]['total_amount']) < 0:
-                                    pass
-                                    print ("Reverse Refund")
-                                    total_amount = D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount'])
-                                    generate_receipts_for.append({"total_amount": total_amount, "settlement_date": inv_hash[inv_keys]['settlement_date']})                             
+                for inv_keys in inv_hash:
+                    if inv_keys not in bp_hash:
+                    
+                        if inv_keys in inv_hash: 
+                            if D(inv_hash[inv_keys]['total_amount']) > 0:
+                                pass
+                                print ("Reverse Payment")
+                                total_amount = D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount'])
+                                generate_receipts_for.append({"total_amount": total_amount, "settlement_date": inv_hash[inv_keys]['settlement_date']})  
+                            if D(inv_hash[inv_keys]['total_amount']) < 0:
+                                pass
+                                print ("Reverse Refund")
+                                total_amount = D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount']) - D(inv_hash[inv_keys]['total_amount'])
+                                generate_receipts_for.append({"total_amount": total_amount, "settlement_date": inv_hash[inv_keys]['settlement_date']})                             
 
                 if fix_discrephency == 'true':
-                    lines = []
+                    
                     for gr in generate_receipts_for:
                         line_status = 1
                         if D(gr['total_amount']) < 0:
                             line_status = 3                                                
-
+                        lines = []
                         lines.append({'ledger_description':str("Payment disrephency for settlement date {}".format(gr['settlement_date'])),"quantity":1,"price_incl_tax":D('{:.2f}'.format(float(gr['total_amount']))),"oracle_code":str(settings.UNALLOCATED_ORACLE_CODE), 'line_status': line_status})
-                    order = invoice_utils.allocate_refund_to_invoice(request, lpic['data']['booking_reference'], lines, invoice_text=None, internal=False, order_total='0.00',user=None, booking_reference_linked=lpic['data']['booking_reference_linked'],system_id=lpic['data']['system_id'])
-                    new_invoice = Invoice.objects.get(order_number=order.number)
-                    new_invoice.settlement_date = datetime.strptime(gr['settlement_date'], '%d/%m/%Y').date()
-                    new_invoice.save()
-                    update_payments(new_invoice.reference)
+                        order = invoice_utils.allocate_refund_to_invoice(request, lpic['data']['booking_reference'], lines, invoice_text=None, internal=False, order_total='0.00',user=None, booking_reference_linked=lpic['data']['booking_reference_linked'],system_id=lpic['data']['system_id'])
+                        new_invoice = Invoice.objects.get(order_number=order.number)
+                        new_invoice.settlement_date = datetime.strptime(gr['settlement_date'], '%d/%m/%Y').date()
+                        new_invoice.save()
+                        update_payments(new_invoice.reference)
                     
                     response = HttpResponse("<script>window.location='/ledger/payments/oracle/payments/linked-payment-issues/"+str(invoice_group_id)+"/';</script>", content_type='text/html')
                     return response
@@ -357,6 +421,31 @@ class NoPaymentView(generic.TemplateView):
          basket = basket_models.Basket.objects.get(id=basket_hash_split[0])
          return render(request, self.template_name, {'basket': basket})
 
+class PaymentTotals(generic.TemplateView):
+    template_name = 'dpaw_payments/payment_totals.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super(PaymentTotals,self).get_context_data(**kwargs)
+        if helpers.is_payment_admin(self.request.user) is True:
+            system_id = self.request.GET.get('system_id','')
+            ois = payments_models.OracleInterfaceSystem.objects.filter(system_id=system_id) 
+            ois_found = False
+            ois_permissions = []
+            if ois.count() > 0:
+                ois_found = True
+                isp = payments_utils.get_oracle_interface_system_permissions(system_id,self.request.user.email)          
+
+                ctx['oracle_systems'] = payments_models.OracleInterfaceSystem.objects.all()
+                ctx['system_id'] = system_id
+                
+                ctx['system_interface_permssions'] = isp
+                ctx['system_interface_permssions_json'] = json.dumps(isp)
+            ctx['ois_found'] = ois_found
+
+        else:
+            self.template_name = 'dpaw_payments/forbidden.html'
+        return ctx
+
 class FailedTransaction(generic.TemplateView):
     template_name = 'dpaw_payments/failed_transaction.html'
 
@@ -364,8 +453,20 @@ class FailedTransaction(generic.TemplateView):
         ctx = super(FailedTransaction,self).get_context_data(**kwargs)
         if helpers.is_payment_admin(self.request.user) is True:
             system_id = self.request.GET.get('system_id','')
-            ctx['oracle_systems'] = payments_models.OracleInterfaceSystem.objects.all()
-            ctx['system_id'] = system_id
+            ois = payments_models.OracleInterfaceSystem.objects.filter(system_id=system_id) 
+            ois_found = False
+            ois_permissions = []
+            if ois.count() > 0:
+                ois_found = True
+                isp = payments_utils.get_oracle_interface_system_permissions(system_id,self.request.user.email)          
+
+                ctx['oracle_systems'] = payments_models.OracleInterfaceSystem.objects.all()
+                ctx['system_id'] = system_id
+                
+                ctx['system_interface_permssions'] = isp
+                ctx['system_interface_permssions_json'] = json.dumps(isp)
+            ctx['ois_found'] = ois_found
+
         else:
             self.template_name = 'dpaw_payments/forbidden.html'
         return ctx
