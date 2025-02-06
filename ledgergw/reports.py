@@ -10,7 +10,7 @@ from ledger.payments.models import OracleParser,OracleParserInvoice, CashTransac
 from datetime import timedelta
 from django.db.models import Q, Min
 #from oscar.apps.order.models import Order
-from ledger.order.models import Order
+from ledger.order.models import Order, Line as OrderLine
 
 
 def outstanding_bookings():
@@ -386,14 +386,13 @@ def booking_refunds_old(start,end, system):
     except:
         raise
 
-def booking_bpoint_settlement_report(_date,system):
+def booking_bpoint_settlement_report(date_from,date_to,system):
     try:
         bpoint, cash = [], []
-        bpoint.extend([x for x in BpointTransaction.objects.filter(settlement_date=_date,response_code=0,crn1__startswith=system).exclude(crn1__endswith='_test')])
-        cash = CashTransaction.objects.filter(created__date=_date,invoice__reference__startswith=system).exclude(type__in=['move_out','move_in'])
-
+        bpoint.extend([x for x in BpointTransaction.objects.filter(settlement_date__gte=date_from,settlement_date__lte=date_to,response_code=0,crn1__startswith=system).exclude(crn1__endswith='_test')])
+        cash = CashTransaction.objects.filter(created__date=date_from,invoice__reference__startswith=system).exclude(type__in=['move_out','move_in'])
         strIO = StringIO()
-        fieldnames = ['Payment Date','Settlement Date','Confirmation Number','Name','Type','Amount','Invoice']
+        fieldnames = ['Payment Date','Settlement Date','Type','Amount','Invoice']
         writer = csv.writer(strIO)
         writer.writerow(fieldnames)
         for b in bpoint:
@@ -409,9 +408,9 @@ def booking_bpoint_settlement_report(_date,system):
                 #    pass
                     
                 #if booking:
-                b_name = u'{} {}'.format('First NAME' ,'Last NAME')
+                
                 created = timezone.localtime(b.created, pytz.timezone('Australia/Perth'))
-                writer.writerow([created.strftime('%d/%m/%Y %H:%M:%S'),b.settlement_date.strftime('%d/%m/%Y'),'BOOKIGN CONFIURMATION NUMBER',b_name.encode('utf-8'),str(b.action),b.amount,invoice.reference])
+                writer.writerow([created.strftime('%d/%m/%Y %H:%M:%S'),b.settlement_date.strftime('%d/%m/%Y'),str(b.action),b.amount,invoice.reference])
                 #else:
                 #    writer.writerow([b.created.strftime('%d/%m/%Y %H:%M:%S'),b.settlement_date.strftime('%d/%m/%Y'),'','',str(b.action),b.amount,invoice.reference])
             except Invoice.DoesNotExist:
@@ -421,9 +420,9 @@ def booking_bpoint_settlement_report(_date,system):
             try:
                 invoice = b.invoice 
                     
-                b_name = u'{} {}'.format('First NAME 1','Last NAME 2')
+               
                 created = timezone.localtime(b.created, pytz.timezone('Australia/Perth'))
-                writer.writerow([created.strftime('%d/%m/%Y %H:%M:%S'),b.created.strftime('%d/%m/%Y'),'BOOKIGN CONFIURMATION NUMBER',b_name.encode('utf-8'),str(b.type),b.amount,invoice.reference])
+                writer.writerow([created.strftime('%d/%m/%Y %H:%M:%S'),b.created.strftime('%d/%m/%Y'),str(b.type),b.amount,invoice.reference])
             except Invoice.DoesNotExist:
                 pass
 
@@ -432,6 +431,38 @@ def booking_bpoint_settlement_report(_date,system):
         return strIO
     except:
         raise
+
+
+def itemised_transaction_report(_date_from,_date_to,system):
+    try:        
+        invoices = Invoice.objects.filter(settlement_date__gte=_date_from,settlement_date__lte=_date_to,reference__startswith=system).order_by('settlement_date')
+
+        strIO = StringIO()
+        fieldnames = ['Invoice Number','Invoice Date','Order Number','Oracle code','Description','Settlement Date','Quantity','Tax Incl','Tax Excl','GST']
+        
+        writer = csv.writer(strIO)
+        writer.writerow(fieldnames)
+        for i in invoices:
+            print (i.reference)
+            try:
+                # invoice = Invoice.objects.get(reference=b.crn1)
+                order_obj = Order.objects.filter(number=i.order_number) 
+                order_lines = OrderLine.objects.filter(order=order_obj[0])
+                for ol in order_lines:  
+                    calculate_tax_portion = ol.unit_price_incl_tax - ol.unit_price_excl_tax                  
+                    writer.writerow([i.reference,i.created.strftime('%d/%m/%Y'), i.order_number,ol.oracle_code,ol.title, i.settlement_date.strftime('%d/%m/%Y'),ol.quantity, ol.unit_price_incl_tax, ol.unit_price_excl_tax,calculate_tax_portion])
+            except Invoice.DoesNotExist:
+                pass
+            except Exception as e:
+                print ("ERROR: Generate Itemisation Transaction Report")
+                print (e)
+
+        strIO.flush()
+        strIO.seek(0)
+        return strIO
+    except:
+        raise
+
 
 def bookings_report(_date):
     try:

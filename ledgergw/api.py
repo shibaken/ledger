@@ -26,7 +26,7 @@ from rest_framework.response import Response
 from rest_framework import viewsets, serializers, status, generics, views
 from rest_framework.renderers import JSONRenderer
 from decimal import Decimal
-from ledgergw.serialisers import ReportSerializer, SettlementReportSerializer, OracleSerializer
+from ledgergw.serialisers import ReportSerializer, SettlementReportSerializer, OracleSerializer,ItemisedSettlementReportSerializer
 from ledgergw import utils as ledgergw_utils
 from django.http import HttpResponse
 from wsgiref.util import FileWrapper
@@ -1306,7 +1306,19 @@ def process_create_future_invoice(request,apikey):
             basket_id = request.POST.get('basket_id','')
             invoice_text = request.POST.get('invoice_text', '')
             return_preload_url = request.POST.get('return_preload_url', '')
+            invoice_name = request.POST.get('invoice_name', '')
+            due_date_string = request.POST.get('due_date', None)
+            print ("DUE DATE")
+            print (due_date_string)
 
+            due_date = None
+            if due_date_string:
+                try:
+                    due_date = datetime.strptime(due_date_string, "%d/%m/%Y")
+                    print (due_date)
+                except Exception as e:
+                    print (e)
+            
             basket_obj = basket_models.Basket.objects.filter(id=basket_id)
             if basket_obj.count() > 0:
                 get_basket = basket_models.Basket.objects.get(id=basket_id)
@@ -1323,7 +1335,6 @@ def process_create_future_invoice(request,apikey):
             get_basket.notification_url = return_preload_url
             get_basket.save()
 
-
             crn_string = '{0}{1}'.format(systemid_check(get_basket.system),order_number)
             invoice = invoice_facade.create_invoice_crn(
                 order_number,
@@ -1331,8 +1342,11 @@ def process_create_future_invoice(request,apikey):
                 crn_string,
                 get_basket.system,
                 invoice_text,
-                None
+                None,
+                invoice_name,
+                due_date
             )
+
             LinkedInvoiceCreate(invoice, get_basket.id)
             jsondata['status'] = 200
             jsondata['message'] = 'success'
@@ -1681,14 +1695,11 @@ def process_refund(request,apikey):
     response = HttpResponse(json.dumps(jsondata), content_type='application/json')
     return response
 
-
-
 def ip_check(request):
     ledger_json  = {}
     ipaddress = ledgerapi_utils.get_client_ip(request)
     jsondata = {'status': 200, 'ipaddress': str(ipaddress)}
     return HttpResponse(json.dumps(jsondata), content_type='application/json')
-
 
 class SettlementReportView(views.APIView):
     renderer_classes = (JSONRenderer,)
@@ -1698,26 +1709,92 @@ class SettlementReportView(views.APIView):
             http_status = status.HTTP_200_OK
             # parse and validate data
             system = request.GET.get('system')
-            report = None
-            data = {
-                "date": request.GET.get('date'),
-            }
-            serializer = SettlementReportSerializer(data=data)
-            serializer.is_valid(raise_exception=True)
-            filename = 'Settlement Report-{}'.format(str(serializer.validated_data['date']))
-            # Generate Report
-            report = reports.booking_bpoint_settlement_report(serializer.validated_data['date'],system)
-            if report:
-                response = HttpResponse(FileWrapper(report), content_type='text/csv')
-                response['Content-Disposition'] = 'attachment; filename="{}.csv"'.format(filename)
-                return response
-            else:
-                raise serializers.ValidationError('No report was generated.')
+
+            ois = payment_models.OracleInterfaceSystem.objects.filter(system_id=system)
+            if ois.count() > 0:            
+                isp = payments_utils.get_oracle_interface_system_permissions(system,self.request.user.email)    
+                if isp["reports_access"] is True or isp["all_access"] is True:
+                    report = None
+                    data = {
+                        "date_from": request.GET.get('from_date'),
+                        "date_to": request.GET.get('to_date'),
+                    }
+                    serializer = SettlementReportSerializer(data=data)
+                    serializer.is_valid(raise_exception=True)
+
+                    
+                    diff_between_dates = (serializer.validated_data['date_to'] - serializer.validated_data['date_from'])
+                    diff_between_dates_in_days = diff_between_dates.days
+                    if diff_between_dates_in_days > 31:
+                        raise serializers.ValidationError('This report has a max limit of 31 days.  Please try a smaller date range.')
+
+                    if diff_between_dates_in_days < 0:
+                        raise serializers.ValidationError('There is an error with the dates you entered.   Please check your dates and try again.')
+
+                    filename = 'Settlement Report-{}-{}'.format(str(serializer.validated_data['date_from']),serializer.validated_data['date_to'])
+
+                    # Generate Report
+                    report = reports.booking_bpoint_settlement_report(serializer.validated_data['date_from'],serializer.validated_data['date_to'],system)
+                    if report:
+                        response = HttpResponse(FileWrapper(report), content_type='text/csv')
+                        response['Content-Disposition'] = 'attachment; filename="{}.csv"'.format(filename)
+                        return response
+                    else:
+                        raise serializers.ValidationError('No report was generated.')
+                else:
+                    raise serializers.ValidationError('Forbidden Access.')
         except serializers.ValidationError:
             raise
         except Exception as e:
             traceback.print_exc()
 
+class ItemisedTransactionReportView(views.APIView):
+    renderer_classes = (JSONRenderer,)
+
+    def get(self, request, format=None):
+        try:
+            http_status = status.HTTP_200_OK
+            # parse and validate data
+            system = request.GET.get('system')
+            ois = payment_models.OracleInterfaceSystem.objects.filter(system_id=system)
+            if ois.count() > 0:            
+                isp = payments_utils.get_oracle_interface_system_permissions(system,self.request.user.email)    
+                if isp["reports_access"] is True or isp["all_access"] is True:
+
+                    report = None
+                    data = {
+                        "date_to": request.GET.get('settlement_date_to'),
+                        "date_from": request.GET.get('settlement_date_from'),
+                    }
+                    
+
+                    serializer = ItemisedSettlementReportSerializer(data=data)
+                    serializer.is_valid(raise_exception=True)
+                    
+                    diff_between_dates = (serializer.validated_data['date_to'] - serializer.validated_data['date_from'])
+                    diff_between_dates_in_days = diff_between_dates.days
+                    if diff_between_dates_in_days > 31:
+                        raise serializers.ValidationError('This report has a max limit of 31 days.  Please try a smaller date range.')
+                        
+                    if diff_between_dates_in_days < 0:
+                        raise serializers.ValidationError('There is an error with the dates you entered.   Please check your dates and try again.')
+                        
+                    filename = 'Itemised-Transaction-Report-from-{}-to-{}'.format(serializer.validated_data['date_from'].strftime("%Y-%m-%d"),serializer.validated_data['date_to'].strftime("%Y-%m-%d"))
+                    # Generate Report
+                    report = reports.itemised_transaction_report(serializer.validated_data['date_from'],serializer.validated_data['date_to'],system)
+                    if report:
+                        response = HttpResponse(FileWrapper(report), content_type='text/csv')
+                        response['Content-Disposition'] = 'attachment; filename="{}.csv"'.format(filename)
+                        return response
+                    else:
+                        raise serializers.ValidationError('No report was generated.')                        
+                else:
+                    raise serializers.ValidationError('Forbidden Access.') 
+                    
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            traceback.print_exc()
 
 class RefundsReportView(views.APIView):
     renderer_classes = (JSONRenderer,)
@@ -1728,21 +1805,29 @@ class RefundsReportView(views.APIView):
             # parse and validate data
             report = None
             system = request.GET.get('system')
-            data = {
-                "start": request.GET.get('start'),
-                "end": request.GET.get('end'),
-            }
-            serializer = ReportSerializer(data=data)
-            serializer.is_valid(raise_exception=True)
-            filename = 'Refunds Report-{}-{}'.format(str(serializer.validated_data['start']), str(serializer.validated_data['end']))
-            # Generate Report
-            report = reports.booking_refunds(serializer.validated_data['start'], serializer.validated_data['end'],system)
-            if report:
-                response = HttpResponse(FileWrapper(report), content_type='text/csv')
-                response['Content-Disposition'] = 'attachment; filename="{}.csv"'.format(filename)
-                return response
-            else:
-                raise serializers.ValidationError('No report was generated.')
+
+            ois = payment_models.OracleInterfaceSystem.objects.filter(system_id=system)
+            if ois.count() > 0:            
+                isp = payments_utils.get_oracle_interface_system_permissions(system,self.request.user.email)    
+                if isp["reports_access"] is True or isp["all_access"] is True:
+
+                    data = {
+                        "start": request.GET.get('start'),
+                        "end": request.GET.get('end'),
+                    }
+                    serializer = ReportSerializer(data=data)
+                    serializer.is_valid(raise_exception=True)
+                    filename = 'Refunds Report-{}-{}'.format(str(serializer.validated_data['start']), str(serializer.validated_data['end']))
+                    # Generate Report
+                    report = reports.booking_refunds(serializer.validated_data['start'], serializer.validated_data['end'],system)
+                    if report:
+                        response = HttpResponse(FileWrapper(report), content_type='text/csv')
+                        response['Content-Disposition'] = 'attachment; filename="{}.csv"'.format(filename)
+                        return response
+                    else:
+                        raise serializers.ValidationError('No report was generated.')
+                else:
+                    raise serializers.ValidationError('Forbidden Access.')                     
         except serializers.ValidationError:
             raise
         except Exception as e:
@@ -1756,17 +1841,24 @@ class OracleJob(views.APIView):
     def get(self, request, format=None):
         try:
             system = request.GET.get('system')
-            ois = payment_models.OracleInterfaceSystem.objects.filter(integration_type='bpoint_api', enabled=True, system_id=system)
-            data = {
-                "date": request.GET.get("date"),
-                "override": request.GET.get("override")
-            }
-            
-            serializer = OracleSerializer(data=data)
-            serializer.is_valid(raise_exception=True)
-            ledgergw_utils.oracle_integration(serializer.validated_data['date'].strftime('%Y-%m-%d'), serializer.validated_data['override'], system, ois[0].system_name)
-            data = {'successful': True}
-            return Response(data)
+            ois = payment_models.OracleInterfaceSystem.objects.filter(system_id=system)
+            if ois.count() > 0:            
+                isp = payments_utils.get_oracle_interface_system_permissions(system,request.user.email)    
+                if isp["reports_access"] is True or isp["all_access"] is True:
+
+                    ois = payment_models.OracleInterfaceSystem.objects.filter(integration_type='bpoint_api', enabled=True, system_id=system)
+                    data = {
+                        "date": request.GET.get("date"),
+                        "override": request.GET.get("override")
+                    }
+                    
+                    serializer = OracleSerializer(data=data)
+                    serializer.is_valid(raise_exception=True)
+                    ledgergw_utils.oracle_integration(serializer.validated_data['date'].strftime('%Y-%m-%d'), serializer.validated_data['override'], system, ois[0].system_name)
+                    data = {'successful': True}
+                    return Response(data)
+                else:
+                    raise serializers.ValidationError('Forbidden Access.')                       
         except serializers.ValidationError:
             print(traceback.print_exc())
             raise
@@ -1803,14 +1895,15 @@ def create_get_emailuser(request,apikey):
                 regex_one_dot = '^[a-z0-9\._+\-]+[@][\w\-]+[.]\w+$'  
                 regex_two_dot = '^[a-z0-9\._+\-]+[@][\w\-]+[.]\w+[.]\w+$'
                 regex_three_dot = '^[a-z0-9\._+\-]+[@]\w+[.]\w{2,3}[.]\w{2,3}\w[.]\w{2}$'
-                regex_four_dot = '^[a-z0-9\._+\-]+[@][\w\-]+[.][\w\-]+[.]\w+\w[.]\w+$'
+                regex_four_dot = '^[a-z0-9\._+\-]+[@][\w\-]+[.][\w\-]+[.]\w+[.]\w+$'
+                regex_five_dot = '^[a-z0-9\._+\-]+[@][\w\-]+[.][\w\-]+[.][\w\-]+[.]\w+[.]\w+$'
 
-                if re.match(regex_one_dot,email) or re.match(regex_two_dot,email) or re.match(regex_three_dot,email) or re.match(regex_four_dot,email):
+                if re.match(regex_one_dot,email) or re.match(regex_two_dot,email) or re.match(regex_three_dot,email) or re.match(regex_four_dot,email) or re.match(regex_five_dot,email):
                     print ("Valid Email Address")
                 else:
                     raise ValidationError('Error: the email address provided is invalid.')                                      
                 
-                eu = models.EmailUser.objects.filter(email=email)
+                eu = models.EmailUser.objects.filter(email__iexact=email)
                 status = ''
                 if eu.count():
                     status = 'existing'
@@ -2197,9 +2290,9 @@ def update_ledger_oracle_invoice(request,apikey):
     ledger_user_json  = {}
     print ('update_ledger_oracle_invoice')
     if ledgerapi_models.API.objects.filter(api_key=apikey,active=1).count():
-        print ("YES 1")
+        
         if ledgerapi_utils.api_allow(ledgerapi_utils.get_client_ip(request),apikey) is True:
-            print ("YES 2")
+        
             ois_obj = {}
             org_array = []
             data = json.loads(request.POST.get('data', "{}"))
