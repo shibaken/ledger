@@ -1,5 +1,7 @@
+import re
 import requests
 import json
+
 from django.conf import settings
 from django.core.cache import cache
 
@@ -39,3 +41,11 @@ def get_department_user_compact(email):
     except:
         return {}
 
+
+def remove_html_tags(text):
+    HTML_TAGS_WRAPPED = re.compile(r'<[^>]+>.+</[^>]+>')
+    HTML_TAGS_NO_WRAPPED = re.compile(r'<[^>]+>')
+
+    text = HTML_TAGS_WRAPPED.sub('', text)
+    text = HTML_TAGS_NO_WRAPPED.sub('', text)
+    return text

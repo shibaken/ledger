@@ -13,7 +13,7 @@ from django.core.exceptions import ValidationError
 from django.core.urlresolvers import resolve
 from six.moves.urllib.parse import urlparse
 #
-from ledger.payments.models import OracleParser, OracleParserInvoice, Invoice, OracleInterface, OracleInterfaceSystem, OracleInterfacePermission, BpointTransaction, BpayTransaction, OracleAccountCode, OracleOpenPeriod, OracleInterfaceDeduction, OracleInterfaceSystem, LinkedInvoiceGroupIncrementer, LinkedInvoice
+from ledger.payments.models import OracleParser, OracleParserInvoice, Invoice, OracleInterface, OracleInterfaceSystem, OracleInterfacePermission, BpointTransaction, BpayTransaction, OracleAccountCode, OracleAccountCodeTax,OracleOpenPeriod, OracleInterfaceDeduction, OracleInterfaceSystem, LinkedInvoiceGroupIncrementer, LinkedInvoice
 #from ledger.payments.invoice import utils
 #from oscar.apps.order.models import Order
 from ledger.order.models import Order
@@ -225,16 +225,18 @@ def oracle_parser(date,system,system_name,override=False):
             # Get the required invoices
             for b in bpoint_txns:
                 if b.crn1 not in invoice_list:
-                    invoice = Invoice.objects.get(reference=b.crn1)
-                    if invoice.system == system:
-                        invoices.append(invoice)
-                        invoice_list.append(b.crn1)
+                    if Invoice.objects.filter(reference=b.crn1).count() > 0:
+                        invoice = Invoice.objects.get(reference=b.crn1)
+                        if invoice.system == system:
+                            invoices.append(invoice)
+                            invoice_list.append(b.crn1)
             for b in bpay_txns:
                 if b.crn not in invoice_list:
-                    invoice = Invoice.objects.get(reference=b.crn)
-                    if invoice.system == system:
-                        invoices.append(invoice)
-                        invoice_list.append(b.crn)
+                    if Invoice.objects.filter(reference=b.crn).count() > 0:
+                        invoice = Invoice.objects.get(reference=b.crn)
+                        if invoice.system == system:
+                            invoices.append(invoice)
+                            invoice_list.append(b.crn)
             for invoice in invoices:
                 if invoice.order:
                     if invoice.reference not in parser_codes.keys():
@@ -959,7 +961,9 @@ def ledger_payment_invoice_calulations(invoice_group_id, invoice_no, booking_ref
                              settlement_date = ''
                              oracle_invoice_number = ''
                              if inv.count() > 0:
-                                 settlement_date = inv[0].settlement_date.strftime("%d/%m/%Y")
+                                 settlement_date = ''
+                                 if inv[0].settlement_date:
+                                     settlement_date = inv[0].settlement_date.strftime("%d/%m/%Y")
                                  oracle_invoice_number = inv[0].oracle_invoice_number
                              linked_payments.append({'id': li.id, 'invoice_reference': li.invoice_reference, 'system_identifier_id': li.system_identifier.id, 'system_identifier_system': li.system_identifier.system_id, 'booking_reference': li.booking_reference, 'booking_reference_linked': li.booking_reference_linked, 'invoice_group_id': li.invoice_group_id.id,'settlement_date': settlement_date, 'oracle_invoice_number': oracle_invoice_number})
                              if li.booking_reference not in linked_payments_booking_references:
@@ -996,7 +1000,8 @@ def ledger_payment_invoice_calulations(invoice_group_id, invoice_no, booking_ref
                              if o.oracle_code == 'NNP449 GST':
                                  total_unallocated = total_unallocated + o.line_price_incl_tax
                              rolling_total = rolling_total + o.line_price_incl_tax
-                             row = {'id': o.id, 'order_number': o.order.number, 'title': o.title, 'line_price_incl_tax': str(o.line_price_incl_tax), 'line_price_excl_tax': str(o.line_price_incl_tax), 'owner_id': str(owner_id),'oracle_code': o.oracle_code, 'rolling_total': str(rolling_total), 'order_date': o.order.date_placed.strftime("%d/%m/%Y %H:%M:%S")}
+                             tax_amount = o.line_price_incl_tax - o.line_price_excl_tax
+                             row = {'id': o.id, 'order_number': o.order.number, 'title': o.title, 'line_price_incl_tax': str(o.line_price_incl_tax), 'line_price_excl_tax': str(o.line_price_excl_tax), 'owner_id': str(owner_id),'oracle_code': o.oracle_code, 'rolling_total': str(rolling_total), 'tax_amount': str(tax_amount), 'order_date': o.order.date_placed.strftime("%d/%m/%Y %H:%M:%S")}
                              order_array.append(row)
 
                              if o.oracle_code not in oracle_code_totals:
@@ -1106,6 +1111,13 @@ def ledger_payment_invoice_calulations(invoice_group_id, invoice_no, booking_ref
                                row['amount'] = str(cash_array_invoices[ca])
                                cai.append(row)
 
+                         oact_obj = {}
+                         oact = OracleAccountCodeTax.objects.all()
+                         for ca in oact: 
+                            if len(ca.oracle_code) > 2:
+                                oact_obj[ca.oracle_code] = ca.tax_type                             
+                                                     
+                         data['data']['oracle_code_tax_status'] = oact_obj
                          data['data']['linked_payments'] = linked_payments
                          data['data']['total_gateway_amount'] = str(total_gateway_amount)
                          data['data']['total_oracle_amount'] = str(rolling_total)

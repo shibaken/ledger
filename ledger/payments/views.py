@@ -14,6 +14,7 @@ from ledger.payments.cash.models import REGION_CHOICES
 from ledger.payments.utils import systemid_check, update_payments, ledger_payment_invoice_calulations 
 from ledger.payments import utils as payments_utils
 from ledger.payments.bpoint.models import BpointTransaction
+from ledger.checkout.utils import calculate_excl_gst
 #
 #from oscar.apps.order.models import Order
 from ledger.order.models import Order
@@ -108,8 +109,6 @@ class OraclePayments(generic.TemplateView):
                     li = LinkedInvoice.objects.filter(invoice_reference=crn1)
                     if li.count() > 0:
                         system_id = li[0].invoice_reference[0:4]
-
-
             
             ois = payments_models.OracleInterfaceSystem.objects.filter(system_id=system_id) 
             ois_found = False
@@ -291,7 +290,11 @@ class LinkedPaymentIssue(generic.TemplateView):
                         if D(gr['total_amount']) < 0:
                             line_status = 3                                                
                         lines = []
-                        lines.append({'ledger_description':str("Payment disrephency for settlement date {}".format(gr['settlement_date'])),"quantity":1,"price_incl_tax":D('{:.2f}'.format(float(gr['total_amount']))),"oracle_code":str(settings.UNALLOCATED_ORACLE_CODE), 'line_status': line_status})
+                        price_excl_tax = float(gr['total_amount'])
+                        if 'GST' in settings.UNALLOCATED_ORACLE_CODE:
+                            price_excl_tax =  calculate_excl_gst(float(gr['total_amount']))                        
+                        
+                        lines.append({'ledger_description':str("Payment disrephency for settlement date {}".format(gr['settlement_date'])),"quantity":1,"price_incl_tax":D('{:.2f}'.format(float(gr['total_amount']))),"price_excl_tax":D('{:.2f}'.format(float(price_excl_tax))),"oracle_code":str(settings.UNALLOCATED_ORACLE_CODE), 'line_status': line_status})
                         order = invoice_utils.allocate_refund_to_invoice(request, lpic['data']['booking_reference'], lines, invoice_text=None, internal=False, order_total='0.00',user=None, booking_reference_linked=lpic['data']['booking_reference_linked'],system_id=lpic['data']['system_id'])
                         new_invoice = Invoice.objects.get(order_number=order.number)
                         new_invoice.settlement_date = datetime.strptime(gr['settlement_date'], '%d/%m/%Y').date()
@@ -472,3 +475,27 @@ class FailedTransaction(generic.TemplateView):
         return ctx
 
 
+class UnpaidInvoice(generic.TemplateView):
+    template_name = 'dpaw_payments/unpaid_invoice.html'
+
+    def get_context_data(self, **kwargs):
+        ctx = super(UnpaidInvoice,self).get_context_data(**kwargs)
+        if helpers.is_payment_admin(self.request.user) is True:
+            system_id = self.request.GET.get('system_id','')
+            ois = payments_models.OracleInterfaceSystem.objects.filter(system_id=system_id) 
+            ois_found = False
+            ois_permissions = []
+            if ois.count() > 0:
+                ois_found = True
+                isp = payments_utils.get_oracle_interface_system_permissions(system_id,self.request.user.email)          
+
+                ctx['oracle_systems'] = payments_models.OracleInterfaceSystem.objects.all()
+                ctx['system_id'] = system_id
+                
+                ctx['system_interface_permssions'] = isp
+                ctx['system_interface_permssions_json'] = json.dumps(isp)
+            ctx['ois_found'] = ois_found
+
+        else:
+            self.template_name = 'dpaw_payments/forbidden.html'
+        return ctx

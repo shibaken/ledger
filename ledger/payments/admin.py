@@ -26,7 +26,7 @@ class CashAdmin(admin.ModelAdmin):
 
 @admin.register(models.Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
-    list_display = ('reference','oracle_invoice_number','order','payment_status','invoice_name','settlement_date','due_date','amount', 'system','created' )
+    list_display = ('reference','oracle_invoice_number','order','payment_status','invoice_name','settlement_date','due_date','voided_settlement_date','amount', 'system','created' )
     search_fields = ('reference',)
     list_filter = ('system'),    
     raw_id_fields = ('previous_invoice','oracle_invoice_file')
@@ -35,6 +35,17 @@ class InvoiceAdmin(admin.ModelAdmin):
 @admin.register(models.InvoiceBPAY)
 class InvoiceBpayAdmin(admin.ModelAdmin):
     pass
+
+@admin.register(models.UnpaidInvoice)
+class UnpaidInvoiceAdmin(admin.ModelAdmin):
+    list_display = ('id','invoice_reference','system','due_status','due_date','amount','created' )
+    search_fields = ('invoice',)
+    raw_id_fields = ('invoice',)
+    # list_filter = ('system'),        
+    list_per_page = 30
+
+    def invoice_number(self, obj):
+        return '%s'%(obj.invoice.reference)            
 
 @admin.register(models.BpayTransaction)
 class BpayTransactionAdmin(admin.ModelAdmin):
@@ -138,12 +149,19 @@ class OracleInterfacePermissionInline(admin.TabularInline):
 @admin.register(models.OracleInterfaceSystem)
 class OracleInterfaceSystemAdmin(admin.ModelAdmin):
     list_display = ('system_name','system_id')
+    search_fields = ('system_name','system_id')
     inlines = [OracleInterfacePermissionInline, OracleInterfaceRecipientInline, OracleInterfaceReportReceipientInline, OracleInterfaceDeductionInline, ] 
 
 @admin.register(models.OracleAccountCode)
 class OracleAccountCode(admin.ModelAdmin):
     list_display = ('active_receivables_activities',)
+    search_fields = ('active_receivables_activities',)
 
+@admin.register(models.OracleAccountCodeTax)
+class OracleAccountCodeTax(admin.ModelAdmin):
+    list_display = ('oracle_code','tax_type','created')
+    list_filter = ('tax_type','created')
+    search_fields = ('oracle_code',)    
 
 @admin.register(models.LinkedInvoice)
 class LinkedInvoiceAdmin(admin.ModelAdmin):
@@ -163,6 +181,7 @@ class PaymentTotal(admin.ModelAdmin):
      list_filter = ('oracle_system','settlement_date',)
      raw_id_fields = ('oracle_system',)
      ordering = ('-settlement_date',)
+     search_fields = ('oracle_system__system_id','settlement_date','oracle_system__system_name')
 
      def discrepancy(self, obj):
             if obj.bpoint_gateway_total != obj.oracle_receipt_total:

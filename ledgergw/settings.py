@@ -103,6 +103,7 @@ SYSTEM_NAME_SHORT = env('SYSTEM_NAME_SHORT', 'ledgergw')
 CAMPGROUNDS_EMAIL = env('CAMPGROUNDS_EMAIL','asi@dbca.wa.gov.au')
 ROTTNEST_EMAIL = env('ROTTNEST_EMAIL', 'asi@dbca.wa.gov.au')
 DEFAULT_FROM_EMAIL = env('EMAIL_FROM','no-reply@dbca.wa.gov.au')
+EMAIL_FROM = env('EMAIL_FROM','no-reply@dbca.wa.gov.au')
 EXPLORE_PARKS_URL = env('EXPLORE_PARKS_URL','https://mooring.dbca.wa.gov.au/')
 PARKSTAY_EXTERNAL_URL = env('PARKSTAY_EXTERNAL_URL','https://mooring.dbca.wa.gov.au/')
 DEV_STATIC = env('DEV_STATIC',False)
@@ -131,7 +132,7 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024 * 50  # 15M
 FILE_UPLOAD_MAX_MEMORY_SIZE = DATA_UPLOAD_MAX_MEMORY_SIZE
 # ../ledgergw/context_processors.pyglobal_config
 #os.environ.setdefault("UPDATE_PAYMENT_ALLOCATION", True)
-
+EMAIL_DELIVERY= env('EMAIL_DELIVERY','off')
 MESSAGE_TAGS = {
     messages.DEBUG: 'alert-info',
     messages.INFO: 'alert-info',

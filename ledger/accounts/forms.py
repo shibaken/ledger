@@ -5,6 +5,7 @@ from django.forms import Form, ModelForm, ChoiceField, FileField, CharField, Tex
 from ledger.widgets import ClearableMultipleFileInput, RadioSelectWithCaptions, AjaxFileUploader
 from django_countries.widgets import CountrySelectWidget
 from .models import Address, Profile, EmailUser, Document
+from ledger.accounts import utils as ledger_accounts_utils
 
 class BaseFormHelper(FormHelper):
     form_class = 'form-control formlabels'
@@ -137,6 +138,30 @@ class EmailUserLegacyForm(forms.ModelForm):
         # some form renderers use widget's is_required field to set required attribute for input element
         self.fields['email'].widget.is_required = email_required
 
+class EmailUserCreateForm(forms.ModelForm):
+    
+    class Meta:
+        model = EmailUser
+        fields = ['email',]
+
+    def __init__(self, *args, **kwargs):
+        super(EmailUserCreateForm, self).__init__(*args, **kwargs)
+        self.helper = BaseFormHelper()
+
+        for f in self.fields:            
+            self.fields[f].widget.attrs['class'] = 'form-control'
+            self.fields[f].widget.attrs['label_class'] = 'form-control'
+
+        self.helper.add_input(Submit('save', 'Create', css_class='btn-lg'))
+        self.helper.add_input(Submit('cancel', 'Cancel', css_class='btn-lg btn-danger'))
+
+    def clean_email(self):
+        cleaned_data = self.clean()        
+        email = ledger_accounts_utils.remove_html_tags(cleaned_data.get('email'))
+        return email
+
+
+
 class EmailUserForm(forms.ModelForm):
     
     identification2 = FileField(label='Upload Identification', required=False, max_length=128, widget=AjaxFileUploader(attrs={'single':'single'})) 
@@ -181,11 +206,20 @@ class EmailUserForm(forms.ModelForm):
         self.helper.add_input(Submit('save', 'Save', css_class='btn-lg'))
         self.helper.add_input(Submit('cancel', 'Cancel', css_class='btn-lg btn-danger'))
 
-        person_id = self.initial['id']
+        person_id = None
+        if "id" in self.initial:
+            person_id = self.initial['id']
+        if person_id is None:
+            if "email" in self.initial:
+                print (self.initial['email'])
+                person_id = EmailUser.objects.get(email=self.initial['email'])
+        
         self.fields['email'].required = email_required
 
         # some form renderers use widget's is_required field to set required attribute for input element
         self.fields['email'].widget.is_required = email_required
+        self.fields['first_name'].required = False
+        self.fields['last_name'].required = False
 
         crispy_boxes.append(HTML("<label>Email</label><div class='p-1'>{}</div>".format(self.initial['email'])))
         crispy_boxes.append(HTML("<label>Given Name(s)</label><div class='p-1'>{}</div>".format(self.initial['first_name'])))
@@ -226,6 +260,157 @@ class EmailUserForm(forms.ModelForm):
         crispy_boxes.append(HTML("<BR>"))
 
         self.helper.layout = Layout(crispy_boxes)
+
+    def clean_last_name(self):        
+        cleaned_data = self.clean()
+        last_name = cleaned_data.get('last_name')
+        if last_name is None:
+            last_name = ''
+        return last_name
+
+    def clean_first_name(self):        
+        cleaned_data = self.clean()
+        first_name = cleaned_data.get('first_name')
+        if first_name is None:
+            first_name = ''
+        return first_name
+    
+    def clean_legal_first_name(self):
+        cleaned_data = self.clean()        
+        legal_first_name = cleaned_data.get('legal_first_name')
+        if legal_first_name is None:
+            legal_first_name = ""
+        legal_first_name = ledger_accounts_utils.remove_html_tags(legal_first_name)
+        
+        return legal_first_name
+
+    def clean_legal_last_name(self):
+        cleaned_data = self.clean()    
+        legal_last_name = cleaned_data.get('legal_last_name')
+        if legal_last_name is None:
+            legal_last_name = ""
+        legal_last_name = ledger_accounts_utils.remove_html_tags(legal_last_name)            
+        return legal_last_name
+    
+    def clean_title(self):
+        cleaned_data = self.clean()        
+        title = cleaned_data.get('title')
+        if title is None:
+            title = ""
+        title = ledger_accounts_utils.remove_html_tags(title)
+        return title
+    
+    def clean_phone_number(self):
+        cleaned_data = self.clean()        
+        phone_number = cleaned_data.get('phone_number')
+        if phone_number is None:
+            phone_number = ""
+        phone_number = ledger_accounts_utils.remove_html_tags(phone_number)
+        return phone_number
+
+    def clean_mobile_number(self):
+        cleaned_data = self.clean()  
+        mobile_number = cleaned_data.get('mobile_number') 
+        if mobile_number is None:
+           mobile_number="" 
+        mobile_number = ledger_accounts_utils.remove_html_tags(mobile_number)
+        return mobile_number    
+
+    def clean_fax_number(self):
+        cleaned_data = self.clean()   
+        fax_number = cleaned_data.get('fax_number')
+        if fax_number is None:
+            fax_number = "" 
+        fax_number = ledger_accounts_utils.remove_html_tags(fax_number)
+        return fax_number    
+
+class EmailUserAddressForm(forms.ModelForm):
+    
+    class Meta:
+        model = Address
+        fields = ['line1', 'line2', 'line3', 'locality', 'state', 'postcode', 'country']
+
+    def clean_line1(self):
+        cleaned_data = self.clean()        
+        line1 = cleaned_data.get('line1')
+        if line1 is None:
+            line1 = ""
+        line1 = ledger_accounts_utils.remove_html_tags(line1)
+        return line1
+    
+    def clean_line2(self):
+        cleaned_data = self.clean()        
+        line2 = cleaned_data.get('line2')
+        if line2 is None:
+            line2 = ""
+        line2 = ledger_accounts_utils.remove_html_tags(line2)
+        return line2
+    
+    def clean_line3(self):
+        cleaned_data = self.clean()        
+        line3 = cleaned_data.get('line3')
+        if line3 is None:
+            line3 = ""
+        line3 = ledger_accounts_utils.remove_html_tags(line3)
+        return line3
+    
+    def clean_locality(self):
+        cleaned_data = self.clean()        
+        locality = cleaned_data.get('locality')
+        if locality is None:
+            locality = ""
+        locality = ledger_accounts_utils.remove_html_tags(locality)
+        return locality
+    
+    def clean_state(self):
+        cleaned_data = self.clean()        
+        state = cleaned_data.get('state')
+        if state is None:
+            state = ""
+        state = ledger_accounts_utils.remove_html_tags(state)
+        return state
+    
+    def clean_country(self):
+        cleaned_data = self.clean()        
+        country = cleaned_data.get('country')
+        if country is None:
+            country = ""
+        country = ledger_accounts_utils.remove_html_tags(country)
+        return country
+    
+    def clean_postcode(self):
+        cleaned_data = self.clean()        
+        postcode = cleaned_data.get('postcode')
+        if postcode is None:
+            postcode = ""
+        postcode = ledger_accounts_utils.remove_html_tags(postcode)
+        return postcode
+
+class EmailUserCreateAddressForm(EmailUserAddressForm):
+    
+    def __init__(self, *args, **kwargs):
+        super(EmailUserCreateAddressForm, self).__init__(*args, **kwargs)
+        self.helper = BaseFormHelper()
+
+        for f in self.fields:            
+            self.fields[f].widget.attrs['class'] = 'form-control'
+            self.fields[f].widget.attrs['label_class'] = 'form-control'
+
+        self.helper.add_input(Submit('save', 'Create', css_class='btn-lg'))
+        self.helper.add_input(Submit('cancel', 'Cancel', css_class='btn-lg btn-danger'))
+
+class EmailUserUpdateAddressForm(EmailUserAddressForm):
+    
+    def __init__(self, *args, **kwargs):
+        super(EmailUserUpdateAddressForm, self).__init__(*args, **kwargs)
+        self.helper = BaseFormHelper()
+
+        for f in self.fields:            
+            self.fields[f].widget.attrs['class'] = 'form-control'
+            self.fields[f].widget.attrs['label_class'] = 'form-control'
+
+        self.helper.add_input(Submit('save', 'Update', css_class='btn-lg'))
+        self.helper.add_input(Submit('cancel', 'Cancel', css_class='btn-lg btn-danger'))
 
 class DocumentForm(forms.ModelForm):
     class Meta:
